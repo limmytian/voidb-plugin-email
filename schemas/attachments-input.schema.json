@@ -1,0 +1,28 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "expected_modseq": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "folder": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string"
+    },
+    "uid": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "uid_validity": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "folder",
+    "uid_validity",
+    "uid"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "VoidB Email Plugin"
+  short_description: "Guide for VoidB Email work"
+  default_prompt: "Use $voidb-plugin-email to update the VoidB Email plugin, mail capabilities, CLI, or TUI."

@@ -1,0 +1,54 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "attachment_index": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "expected_modseq": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "expected_sha256": {
+      "pattern": "^[A-Fa-f0-9]{64}$",
+      "type": "string"
+    },
+    "folder": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "type": "string"
+    },
+    "local_path": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "local_root": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "uid": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "uid_validity": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "folder",
+    "uid_validity",
+    "uid",
+    "attachment_index",
+    "local_root",
+    "local_path",
+    "idempotency_key"
+  ],
+  "type": "object"
+}

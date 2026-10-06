@@ -1,0 +1,46 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "attachment_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "content_redacted": {
+      "type": "boolean"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "idempotent_replay": {
+      "type": "boolean"
+    },
+    "message_id": {
+      "type": "string"
+    },
+    "preview": {
+      "type": "object"
+    },
+    "recipient_count": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "sent": {
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "planned",
+        "previewed",
+        "accepted"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "dry_run",
+    "sent",
+    "idempotent_replay"
+  ],
+  "type": "object"
+}

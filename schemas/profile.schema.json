@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "email": {
+      "description": "Email address / username",
+      "type": "string"
+    },
+    "password": {
+      "description": "Password or app-specific token",
+      "type": "string"
+    },
+    "protocol": {
+      "description": "Receive protocol",
+      "enum": [
+        "IMAP",
+        "POP3"
+      ],
+      "type": "string"
+    },
+    "receive": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "port"
+      ],
+      "type": "object"
+    },
+    "receive_security": {
+      "default": "SSL/TLS",
+      "enum": [
+        "PLAIN",
+        "SSL/TLS",
+        "STARTTLS"
+      ],
+      "type": "string"
+    },
+    "smtp": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "port"
+      ],
+      "type": "object"
+    },
+    "smtp_security": {
+      "default": "STARTTLS",
+      "enum": [
+        "PLAIN",
+        "SSL/TLS",
+        "STARTTLS"
+      ],
+      "type": "string"
+    },
+    "verify_tls": {
+      "default": true,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "email",
+    "password",
+    "protocol",
+    "receive",
+    "smtp"
+  ],
+  "title": "EmailConnectionProfile",
+  "type": "object"
+}

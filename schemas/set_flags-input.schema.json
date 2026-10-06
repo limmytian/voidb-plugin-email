@@ -1,0 +1,75 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "default": "add",
+      "enum": [
+        "add",
+        "remove",
+        "replace"
+      ],
+      "type": "string"
+    },
+    "flags": {
+      "items": {
+        "enum": [
+          "seen",
+          "answered",
+          "flagged",
+          "deleted",
+          "draft"
+        ],
+        "type": "string"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "idempotency_key": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "type": "string"
+    },
+    "messages": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_modseq": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "folder": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "uid": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "uid_validity": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "folder",
+          "uid_validity",
+          "uid"
+        ],
+        "type": "object"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "messages",
+    "flags",
+    "idempotency_key"
+  ],
+  "type": "object"
+}

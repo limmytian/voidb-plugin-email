@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "folder": {
+      "default": "INBOX",
+      "minLength": 1,
+      "type": "string"
+    },
+    "unread_only": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "type": "object"
+}

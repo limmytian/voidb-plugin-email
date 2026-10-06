@@ -1,0 +1,124 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "message": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "content_type": {
+                "type": "string"
+              },
+              "filename": {
+                "type": "string"
+              },
+              "size": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "filename",
+              "content_type",
+              "size"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "cc": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "date": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "html": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "html_available": {
+          "type": "boolean"
+        },
+        "html_byte_limit": {
+          "maximum": 262144,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "html_truncated": {
+          "type": "boolean"
+        },
+        "modseq": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "text_byte_limit": {
+          "maximum": 262144,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "text_truncated": {
+          "type": "boolean"
+        },
+        "to": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "uid": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "uid_validity": {
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "uid",
+        "uid_validity",
+        "modseq",
+        "from",
+        "to",
+        "cc",
+        "subject",
+        "date",
+        "text",
+        "text_truncated",
+        "text_byte_limit",
+        "html",
+        "html_available",
+        "html_truncated",
+        "html_byte_limit",
+        "attachments"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "message"
+  ],
+  "type": "object"
+}

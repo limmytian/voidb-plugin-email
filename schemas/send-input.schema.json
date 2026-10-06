@@ -1,0 +1,141 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "allowed_domains": {
+      "items": {
+        "maxLength": 253,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "attachments": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_size": {
+            "maximum": 26214400,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "content_type": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "filename": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "local_path": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "local_path",
+          "byte_size"
+        ],
+        "type": "object"
+      },
+      "maxItems": 20,
+      "type": "array"
+    },
+    "bcc": {
+      "items": {
+        "maxLength": 320,
+        "minLength": 3,
+        "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "blocked_domains": {
+      "items": {
+        "maxLength": 253,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "cc": {
+      "items": {
+        "maxLength": 320,
+        "minLength": 3,
+        "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "html_body": {
+      "maxLength": 2097152,
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "type": "string"
+    },
+    "in_reply_to": {
+      "maxLength": 998,
+      "minLength": 1,
+      "type": "string"
+    },
+    "local_root": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "maximum_recipients": {
+      "maximum": 50,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "references": {
+      "items": {
+        "maxLength": 998,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 20,
+      "type": "array"
+    },
+    "reply_to": {
+      "maxLength": 320,
+      "minLength": 3,
+      "type": "string"
+    },
+    "subject": {
+      "maxLength": 998,
+      "type": "string"
+    },
+    "text_body": {
+      "maxLength": 1048576,
+      "type": "string"
+    },
+    "to": {
+      "items": {
+        "maxLength": 320,
+        "minLength": 3,
+        "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "to",
+    "subject",
+    "text_body",
+    "idempotency_key"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,205 @@
+id = "email"
+name = "Email Plugin"
+version = "0.3.0"
+protocol_version = "1"
+description = "Email (IMAP/POP3/SMTP) remote communication and mailbox management plugin for VoidB."
+license = "Apache-2.0"
+homepage = "https://github.com/limmytian/voidb-plugin-email"
+
+[runtime]
+command = "voidb-plugin-email"
+args = ["serve"]
+transport = "stdio-jsonrpc"
+
+[connections]
+profile_schema = "schemas/profile.schema.json"
+secret_classes = ["password"]
+
+[[capabilities]]
+id = "diagnostics"
+description = "Return agent-safe email profile diagnostics without opening a network connection."
+input_schema = "schemas/diagnostics-input.schema.json"
+output_schema = "schemas/diagnostics-output.schema.json"
+permissions = ["connection.read", "email.diagnostics"]
+risk = "read_only"
+destructive = false
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = false
+default_timeout_ms = 5000
+
+[[capabilities]]
+id = "folders"
+description = "List mailbox folders with message and unread counts."
+input_schema = "schemas/folders-input.schema.json"
+output_schema = "schemas/folders-output.schema.json"
+permissions = ["connection.read", "email.folders"]
+risk = "read_only"
+destructive = false
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = false
+default_timeout_ms = 30000
+
+[[capabilities]]
+id = "list"
+description = "List message envelopes from one folder with bounded pagination."
+input_schema = "schemas/list-input.schema.json"
+output_schema = "schemas/list-output.schema.json"
+permissions = ["connection.read", "email.list"]
+risk = "read_only"
+destructive = false
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = false
+default_timeout_ms = 30000
+
+[[capabilities]]
+id = "search"
+description = "Search a bounded page of message envelopes by sender or subject."
+input_schema = "schemas/search-input.schema.json"
+output_schema = "schemas/search-output.schema.json"
+permissions = ["connection.read", "email.search"]
+risk = "read_only"
+destructive = false
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = false
+default_timeout_ms = 30000
+
+[[capabilities]]
+id = "fetch"
+description = "Fetch one message body without marking it read."
+input_schema = "schemas/fetch-input.schema.json"
+output_schema = "schemas/fetch-output.schema.json"
+permissions = ["connection.read", "email.fetch"]
+risk = "read_only"
+destructive = false
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = false
+default_timeout_ms = 30000
+
+[[capabilities]]
+id = "draft"
+description = "Validate and return a redacted message plan without contacting SMTP or persisting a draft."
+input_schema = "schemas/draft-input.schema.json"
+output_schema = "schemas/draft-output.schema.json"
+permissions = ["email.send", "email.preview"]
+risk = "read_only"
+destructive = false
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = true
+default_timeout_ms = 120000
+
+[[capabilities]]
+id = "send"
+description = "Send a structured message after a redacted dry-run preview and acknowledgement."
+input_schema = "schemas/send-input.schema.json"
+output_schema = "schemas/send-output.schema.json"
+permissions = ["email.send"]
+risk = "destructive"
+destructive = true
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = true
+default_timeout_ms = 120000
+
+[[capabilities]]
+id = "move"
+description = "Move stable IMAP UIDs after UIDVALIDITY and optional MODSEQ validation."
+input_schema = "schemas/move-input.schema.json"
+output_schema = "schemas/move-output.schema.json"
+permissions = ["email.move"]
+risk = "destructive"
+destructive = true
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = true
+default_timeout_ms = 60000
+
+[[capabilities]]
+id = "delete"
+description = "Move stable IMAP UIDs to Trash or explicitly UID-expunge them."
+input_schema = "schemas/delete-input.schema.json"
+output_schema = "schemas/delete-output.schema.json"
+permissions = ["email.delete"]
+risk = "destructive"
+destructive = true
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = true
+default_timeout_ms = 60000
+
+[[capabilities]]
+id = "set_flags"
+description = "Apply allowlisted flags to stable IMAP UIDs with bounded partial-failure reporting."
+input_schema = "schemas/set_flags-input.schema.json"
+output_schema = "schemas/set_flags-output.schema.json"
+permissions = ["email.set_flags"]
+risk = "destructive"
+destructive = true
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = true
+default_timeout_ms = 60000
+
+[[capabilities]]
+id = "attachments"
+description = "List bounded attachment metadata for one stable IMAP message identity."
+input_schema = "schemas/attachments-input.schema.json"
+output_schema = "schemas/attachments-output.schema.json"
+permissions = ["connection.read", "email.attachments"]
+risk = "read_only"
+destructive = false
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = false
+default_timeout_ms = 30000
+
+[[capabilities]]
+id = "download_attachment"
+description = "Write one attachment to an approved local destination with no replacement."
+input_schema = "schemas/download_attachment-input.schema.json"
+output_schema = "schemas/download_attachment-output.schema.json"
+permissions = ["email.download_attachment", "local.write"]
+risk = "destructive"
+destructive = true
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = true
+default_timeout_ms = 120000
+
+[[capabilities]]
+id = "idle"
+description = "Observe bounded IMAP mailbox changes with reconnect, heartbeat, cursor, cancellation, and close semantics."
+input_schema = "schemas/idle-input.schema.json"
+output_schema = "schemas/idle-output.schema.json"
+permissions = ["connection.read", "email.idle"]
+risk = "read_only"
+destructive = false
+streaming = false
+connection_required = true
+required_secret_classes = []
+supports_dry_run = false
+default_timeout_ms = 30000
+
+[ui]
+tui = true
+
+[requirements]
+voidb_core = ">=0.1.0"
+platforms = ["darwin", "linux", "windows"]

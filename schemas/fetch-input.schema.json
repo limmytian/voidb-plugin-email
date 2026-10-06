@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "folder": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "include_html": {
+      "default": false,
+      "type": "boolean"
+    },
+    "max_html_bytes": {
+      "default": 65536,
+      "maximum": 262144,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "max_text_bytes": {
+      "default": 65536,
+      "maximum": 262144,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "uid": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "folder",
+    "uid"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,127 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "folder": {
+      "type": "string"
+    },
+    "limit": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "message_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "messages": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "modseq": {
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "seen": {
+            "type": "boolean"
+          },
+          "size": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "uid": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "uid_validity": {
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "uid",
+          "uid_validity",
+          "modseq",
+          "from",
+          "subject",
+          "date",
+          "seen",
+          "size"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "page": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "query": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "search_scope": {
+      "enum": [
+        "none",
+        "paged_envelope"
+      ],
+      "type": "string"
+    },
+    "searched_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "total": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "unread_only": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "folder",
+    "messages",
+    "message_count",
+    "total",
+    "page",
+    "limit",
+    "truncated",
+    "unread_only",
+    "query",
+    "search_scope",
+    "searched_count"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,23 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "folder": {
+      "default": "INBOX",
+      "minLength": 1,
+      "type": "string"
+    },
+    "query": {
+      "description": "Case-insensitive search over sender and subject for the fetched page.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "unread_only": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "type": "object"
+}

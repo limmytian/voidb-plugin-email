@@ -1,0 +1,62 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "delete_deferred": {
+      "type": "boolean"
+    },
+    "network_checked": {
+      "type": "boolean"
+    },
+    "protocol": {
+      "enum": [
+        "imap",
+        "pop3"
+      ],
+      "type": "string"
+    },
+    "receive_port": {
+      "maximum": 65535,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "receive_security": {
+      "enum": [
+        "ssl_tls",
+        "starttls",
+        "none"
+      ],
+      "type": "string"
+    },
+    "send_deferred": {
+      "type": "boolean"
+    },
+    "smtp_port": {
+      "maximum": 65535,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "smtp_security": {
+      "enum": [
+        "ssl_tls",
+        "starttls",
+        "none"
+      ],
+      "type": "string"
+    },
+    "verify_tls": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "protocol",
+    "receive_security",
+    "receive_port",
+    "smtp_security",
+    "smtp_port",
+    "verify_tls",
+    "delete_deferred",
+    "send_deferred",
+    "network_checked"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,81 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "dry_run": {
+      "type": "boolean"
+    },
+    "failed": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "idempotent_replay": {
+      "type": "boolean"
+    },
+    "message_count": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "operation": {
+      "enum": [
+        "move",
+        "delete",
+        "set_flags"
+      ],
+      "type": "string"
+    },
+    "outcomes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "succeeded",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "status"
+        ],
+        "type": "object"
+      },
+      "maxItems": 100,
+      "type": "array"
+    },
+    "partial_failure": {
+      "type": "boolean"
+    },
+    "preview": {
+      "type": "object"
+    },
+    "succeeded": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "would_execute": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "operation",
+    "dry_run",
+    "would_execute",
+    "idempotent_replay",
+    "message_count",
+    "succeeded",
+    "failed",
+    "partial_failure",
+    "outcomes",
+    "preview"
+  ],
+  "type": "object"
+}

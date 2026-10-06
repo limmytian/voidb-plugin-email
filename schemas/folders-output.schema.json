@@ -1,0 +1,47 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "folder_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "folders": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "delimiter": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "message_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unread_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "display_name",
+          "delimiter",
+          "message_count",
+          "unread_count"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "folders",
+    "folder_count"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,57 @@
+{
+  "redact_bodies": true,
+  "diagnostics": "fixture imap receive=none smtp=none verify_tls=true",
+  "folders": [
+    {
+      "name": "INBOX",
+      "display_name": "INBOX",
+      "delimiter": "/",
+      "message_count": 2,
+      "unread_count": 1
+    },
+    {
+      "name": "Archive",
+      "display_name": "Archive",
+      "delimiter": "/",
+      "message_count": 4,
+      "unread_count": 0
+    }
+  ],
+  "messages": [
+    {
+      "uid": 1001,
+      "from": "fixture.sender@example.test",
+      "subject": "Quarterly report ready",
+      "date": "2026-07-07T08:00:00Z",
+      "seen": false,
+      "size": 2048
+    },
+    {
+      "uid": 1002,
+      "from": "alerts@example.test",
+      "subject": "TLS certificate rotation",
+      "date": "2026-07-07T08:05:00Z",
+      "seen": true,
+      "size": 1024
+    }
+  ],
+  "bodies": [
+    {
+      "uid": 1001,
+      "from": "fixture.sender@example.test",
+      "to": ["operator@example.test"],
+      "cc": [],
+      "subject": "Quarterly report ready",
+      "date": "2026-07-07T08:00:00Z",
+      "text": "PRIVATE_BODY_SHOULD_NOT_APPEAR",
+      "html": null,
+      "attachments": [
+        {
+          "filename": "quarterly-report.pdf",
+          "content_type": "application/pdf",
+          "size": 4096
+        }
+      ]
+    }
+  ]
+}

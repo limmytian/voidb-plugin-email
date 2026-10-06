@@ -1,0 +1,50 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "bytes": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "content_type": {
+      "type": "string"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "idempotent_replay": {
+      "type": "boolean"
+    },
+    "local_scope_id": {
+      "type": "string"
+    },
+    "no_overwrite": {
+      "type": "boolean"
+    },
+    "preview": {
+      "type": "object"
+    },
+    "progress": {
+      "type": "object"
+    },
+    "sha256": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "previewed",
+        "written"
+      ],
+      "type": "string"
+    },
+    "written": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "status",
+    "dry_run",
+    "written",
+    "idempotent_replay"
+  ],
+  "type": "object"
+}

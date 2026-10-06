@@ -1,0 +1,38 @@
+[package]
+name = "voidb-plugin-email"
+version = "0.3.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["limmytian <limmytian@gmail.com>"]
+description = "Standalone VoidB process plugin for Email (IMAP/POP3/SMTP) services"
+repository = "https://github.com/limmytian/voidb-plugin-email"
+
+[[bin]]
+name = "voidb-plugin-email"
+path = "src/main.rs"
+
+[dependencies]
+voidb-process-plugin-sdk = { path = "../voidb/crates/voidb-process-plugin-sdk" }
+voidb-core = { path = "../voidb/crates/voidb-core" }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.43", features = ["full"] }
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+imap = "=3.0.0-alpha.15"
+native-tls = "0.2"
+lettre = { version = "0.11", features = ["tokio1-native-tls", "builder", "smtp-transport"] }
+mailparse = "0.15"
+sha2 = "0.10"
+clap = { version = "4.5", features = ["derive"] }
+async-trait = "0.1"
+ratatui = "0.29"
+crossterm = "0.28"
+
+[dev-dependencies]
+uuid = { version = "1.13", features = ["v4"] }
+
+[[example]]
+name = "fixture_smoke"
+path = "examples/fixture_smoke.rs"

@@ -1,0 +1,63 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "delete_mode": {
+      "default": "trash",
+      "enum": [
+        "trash",
+        "expunge"
+      ],
+      "type": "string"
+    },
+    "destination_folder": {
+      "default": "Trash",
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "type": "string"
+    },
+    "messages": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_modseq": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "folder": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "uid": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "uid_validity": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "folder",
+          "uid_validity",
+          "uid"
+        ],
+        "type": "object"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "messages",
+    "idempotency_key"
+  ],
+  "type": "object"
+}

@@ -1,0 +1,73 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "attachment_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "attachments": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes_omitted": {
+            "const": true
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filename_safe": {
+            "type": "boolean"
+          },
+          "index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "size": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "index",
+          "filename",
+          "filename_safe",
+          "content_type",
+          "size",
+          "bytes_omitted"
+        ],
+        "type": "object"
+      },
+      "maxItems": 20,
+      "type": "array"
+    },
+    "bytes_omitted": {
+      "const": true
+    },
+    "folder": {
+      "type": "string"
+    },
+    "uid": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "uid_validity": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "folder",
+    "uid_validity",
+    "uid",
+    "attachment_count",
+    "attachments",
+    "bytes_omitted"
+  ],
+  "type": "object"
+}
