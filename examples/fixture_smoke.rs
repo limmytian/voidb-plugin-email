@@ -4,6 +4,8 @@
 //! through the plugin service layer, then exercises the read-only Email
 //! capability surface against the generated fixture environment.
 
+#![allow(clippy::result_large_err)]
+
 use std::fs;
 use std::sync::Arc;
 
