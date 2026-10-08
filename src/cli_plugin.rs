@@ -79,7 +79,7 @@ impl CliPlugin for EmailCliPlugin {
                 ),
             Command::new("delete")
                 .about("Delete a message")
-                .arg(conn_arg)
+                .arg(conn_arg.clone())
                 .arg(Arg::new("folder").required(true).help("Folder name"))
                 .arg(
                     Arg::new("uid")
@@ -121,6 +121,9 @@ impl CliPlugin for EmailCliPlugin {
                         .value_name("PATH")
                         .help("Write fixture-backed standalone Email TUI evidence JSON and exit"),
                 ),
+            Command::new("test")
+                .about("Test email connection")
+                .arg(conn_arg.clone()),
         ]
     }
 
@@ -131,6 +134,7 @@ impl CliPlugin for EmailCliPlugin {
         ctx: &CliContext,
     ) -> Result<(), VoidbError> {
         match command {
+            "test" => self.handle_test(matches, ctx).await,
             "folders" => self.handle_folders(matches, ctx).await,
             "list" => self.handle_list(matches, ctx).await,
             "read" => self.handle_read(matches, ctx).await,
@@ -225,6 +229,18 @@ impl EmailCliPlugin {
             .map_err(|e| VoidbError::Connection(e.to_string()))?;
 
         Ok(svc)
+    }
+
+    async fn handle_test(&self, matches: &ArgMatches, ctx: &CliContext) -> Result<(), VoidbError> {
+        let conn_name = matches.get_one::<String>("connection").unwrap();
+        let email_config = Self::parse_config(conn_name, ctx)?;
+        let mut svc = Self::connect_service(email_config).await?;
+        let folders = svc
+            .list_folders_direct()
+            .await
+            .map_err(|e| VoidbError::Connection(e.to_string()))?;
+        println!("Connected: found {} folder(s)", folders.len());
+        Ok(())
     }
 
     async fn handle_folders(
