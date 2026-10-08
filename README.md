@@ -7,6 +7,11 @@ Independent process plugin for [VoidB](https://github.com/limmytian/voidb) to co
 ## Features
 
 - **Autonomous Process Architecture**: Runs in an isolated OS process communicating with VoidB via `stdio-jsonrpc`.
+- **Tri-Modal Operation**:
+  - `test`: Automated connectivity verification.
+  - `tui`: Standalone full-screen interactive terminal interface.
+  - `serve`: `stdio-jsonrpc` protocol server for AI Agents and automated orchestration.
+  - Domain commands: Mailbox folders, message listing, message inspection, and message deletion.
 - **Capability Surface**:
   - `diagnostics`: Return agent-safe email profile diagnostics without opening network connections.
   - `folders`: List mailbox folders with message and unread counts.
@@ -21,24 +26,51 @@ Independent process plugin for [VoidB](https://github.com/limmytian/voidb) to co
   - `attachments`: List bounded attachment metadata for stable message identities.
   - `download_attachment`: Download message attachments to approved destinations.
   - `idle`: Observe bounded IMAP mailbox changes.
-- **Dual Mode**: Can run as a JSON-RPC worker server (`voidb-plugin-email serve`) or standalone interactive TUI.
+
+## Usage & Operational Modes
+
+When installed, `voidb-cli` automatically discovers this plugin and provides seamless transparent dispatch:
+
+### 1. Human Operations (CLI & TUI)
+
+```bash
+# Connectivity test
+voidb-cli email test --profile my-email
+
+# Launch standalone interactive fullscreen TUI
+voidb-cli email tui --profile my-email
+
+# Mailbox operations
+voidb-cli email folders --profile my-email
+voidb-cli email list INBOX --limit 20 --profile my-email
+voidb-cli email read INBOX 12345 --profile my-email
+```
+
+### 2. Machine Communication (AI Agents & JSON-RPC)
+
+```bash
+# Run the stdio-jsonrpc server directly or via voidb-cli
+voidb-cli email serve
+# Or directly run the binary:
+./bin/voidb-plugin-email serve
+```
 
 ## Quick Start
 
 ### Installation
 
-Place this plugin directory or a packaged release archive under your VoidB plugins directory:
+Place this plugin directory or a packaged release archive under your VoidB plugins directory (`~/Library/Application Support/voidb/plugins/email` on macOS, or `~/.local/share/voidb/plugins/email` on Linux):
 
 ```bash
-mkdir -p ~/.config/voidb/plugins/email
-cp -r plugin.toml bin schemas ~/.config/voidb/plugins/email/
+mkdir -p "$HOME/Library/Application Support/voidb/plugins/email"
+cp -r plugin.toml bin schemas "$HOME/Library/Application Support/voidb/plugins/email/"
 ```
 
 Verify discovery via `voidb`:
 
 ```bash
 voidb-cli plugin list
-voidb-cli plugin describe email
+voidb-cli email --help
 ```
 
 ### Development & Build
