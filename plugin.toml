@@ -11,6 +11,8 @@ command = "voidb-plugin-email"
 args = ["serve"]
 transport = "stdio-jsonrpc"
 
+[runtime.env]
+
 [connections]
 profile_schema = "schemas/profile.schema.json"
 secret_classes = ["password"]
@@ -20,186 +22,636 @@ id = "diagnostics"
 description = "Return agent-safe email profile diagnostics without opening a network connection."
 input_schema = "schemas/diagnostics-input.schema.json"
 output_schema = "schemas/diagnostics-output.schema.json"
-permissions = ["connection.read", "email.diagnostics"]
+permissions = [
+    "connection.read",
+    "email.diagnostics",
+]
 risk = "read_only"
 destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = false
 default_timeout_ms = 5000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Read operations are bounded and cannot use Email write permissions."
+capability_wide_allowed = true
 
 [[capabilities]]
 id = "folders"
 description = "List mailbox folders with message and unread counts."
 input_schema = "schemas/folders-input.schema.json"
 output_schema = "schemas/folders-output.schema.json"
-permissions = ["connection.read", "email.folders"]
+permissions = [
+    "connection.read",
+    "email.folders",
+]
 risk = "read_only"
 destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = false
 default_timeout_ms = 30000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Read operations are bounded and cannot use Email write permissions."
+capability_wide_allowed = true
 
 [[capabilities]]
 id = "list"
 description = "List message envelopes from one folder with bounded pagination."
 input_schema = "schemas/list-input.schema.json"
 output_schema = "schemas/list-output.schema.json"
-permissions = ["connection.read", "email.list"]
+permissions = [
+    "connection.read",
+    "email.list",
+]
 risk = "read_only"
 destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = false
 default_timeout_ms = 30000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Read operations are bounded and cannot use Email write permissions."
+capability_wide_allowed = true
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/folder"
+label = "Mailbox folder"
+value_type = "path"
+required = false
+constraint = "prefix"
+risk_emphasis = "normal"
 
 [[capabilities]]
 id = "search"
 description = "Search a bounded page of message envelopes by sender or subject."
 input_schema = "schemas/search-input.schema.json"
 output_schema = "schemas/search-output.schema.json"
-permissions = ["connection.read", "email.search"]
+permissions = [
+    "connection.read",
+    "email.search",
+]
 risk = "read_only"
 destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = false
 default_timeout_ms = 30000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Read operations are bounded and cannot use Email write permissions."
+capability_wide_allowed = true
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/folder"
+label = "Mailbox folder"
+value_type = "path"
+required = false
+constraint = "prefix"
+risk_emphasis = "normal"
 
 [[capabilities]]
 id = "fetch"
 description = "Fetch one message body without marking it read."
 input_schema = "schemas/fetch-input.schema.json"
 output_schema = "schemas/fetch-output.schema.json"
-permissions = ["connection.read", "email.fetch"]
+permissions = [
+    "connection.read",
+    "email.fetch",
+]
 risk = "read_only"
 destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = false
 default_timeout_ms = 30000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Read operations are bounded and cannot use Email write permissions."
+capability_wide_allowed = true
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/folder"
+label = "Mailbox folder"
+value_type = "path"
+required = true
+constraint = "prefix"
+risk_emphasis = "normal"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/uid"
+label = "Message UID"
+value_type = "integer"
+required = true
+constraint = "exact"
+risk_emphasis = "normal"
 
 [[capabilities]]
 id = "draft"
 description = "Validate and return a redacted message plan without contacting SMTP or persisting a draft."
 input_schema = "schemas/draft-input.schema.json"
 output_schema = "schemas/draft-output.schema.json"
-permissions = ["email.send", "email.preview"]
+permissions = [
+    "connection.read",
+    "email.draft",
+]
 risk = "read_only"
 destructive = false
 streaming = false
-connection_required = true
+execution_mode = "stateless"
+connection_required = false
 required_secret_classes = []
-supports_dry_run = true
-default_timeout_ms = 120000
+supports_dry_run = false
+default_timeout_ms = 5000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Draft planning is local validation only and returns no addresses, subject, body, paths, or attachment bytes."
+capability_wide_allowed = true
 
 [[capabilities]]
 id = "send"
 description = "Send a structured message after a redacted dry-run preview and acknowledgement."
 input_schema = "schemas/send-input.schema.json"
 output_schema = "schemas/send-output.schema.json"
-permissions = ["email.send"]
-risk = "destructive"
-destructive = true
+permissions = [
+    "connection.write",
+    "email.send",
+]
+risk = "external_side_effect"
+destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = true
 default_timeout_ms = 120000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Email writes require scoped approval, redacted preview support, an invocation acknowledgement, and an idempotency key."
+capability_wide_allowed = true
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/to"
+label = "To recipients"
+value_type = "string_list"
+required = true
+constraint = "subset"
+risk_emphasis = "destructive"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/cc"
+label = "Cc recipients"
+value_type = "string_list"
+required = false
+constraint = "subset"
+risk_emphasis = "normal"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/bcc"
+label = "Bcc recipients"
+value_type = "string_list"
+required = false
+constraint = "subset"
+risk_emphasis = "destructive"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/local_root"
+label = "Attachment source root"
+value_type = "path"
+required = false
+constraint = "exact"
+risk_emphasis = "normal"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/attachments"
+label = "Attachment sources"
+value_type = "json"
+required = false
+constraint = "subset"
+risk_emphasis = "normal"
 
 [[capabilities]]
 id = "move"
 description = "Move stable IMAP UIDs after UIDVALIDITY and optional MODSEQ validation."
 input_schema = "schemas/move-input.schema.json"
 output_schema = "schemas/move-output.schema.json"
-permissions = ["email.move"]
-risk = "destructive"
-destructive = true
+permissions = [
+    "connection.write",
+    "email.move",
+]
+risk = "external_side_effect"
+destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = true
 default_timeout_ms = 60000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Email writes require scoped approval, redacted preview support, an invocation acknowledgement, and an idempotency key."
+capability_wide_allowed = true
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/messages"
+label = "Stable message identities"
+value_type = "json"
+required = true
+constraint = "subset"
+risk_emphasis = "destructive"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/destination_folder"
+label = "Destination mailbox"
+value_type = "path"
+required = false
+constraint = "exact"
+risk_emphasis = "destructive"
 
 [[capabilities]]
 id = "delete"
 description = "Move stable IMAP UIDs to Trash or explicitly UID-expunge them."
 input_schema = "schemas/delete-input.schema.json"
 output_schema = "schemas/delete-output.schema.json"
-permissions = ["email.delete"]
+permissions = [
+    "connection.write",
+    "email.delete",
+]
 risk = "destructive"
 destructive = true
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = true
 default_timeout_ms = 60000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Email writes require scoped approval, redacted preview support, an invocation acknowledgement, and an idempotency key."
+capability_wide_allowed = true
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/messages"
+label = "Stable message identities"
+value_type = "json"
+required = true
+constraint = "subset"
+risk_emphasis = "destructive"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/destination_folder"
+label = "Destination mailbox"
+value_type = "path"
+required = false
+constraint = "exact"
+risk_emphasis = "destructive"
 
 [[capabilities]]
 id = "set_flags"
 description = "Apply allowlisted flags to stable IMAP UIDs with bounded partial-failure reporting."
 input_schema = "schemas/set_flags-input.schema.json"
 output_schema = "schemas/set_flags-output.schema.json"
-permissions = ["email.set_flags"]
-risk = "destructive"
-destructive = true
+permissions = [
+    "connection.write",
+    "email.set_flags",
+]
+risk = "external_side_effect"
+destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = true
 default_timeout_ms = 60000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Email writes require scoped approval, redacted preview support, an invocation acknowledgement, and an idempotency key."
+capability_wide_allowed = true
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/messages"
+label = "Stable message identities"
+value_type = "json"
+required = true
+constraint = "subset"
+risk_emphasis = "destructive"
 
 [[capabilities]]
 id = "attachments"
 description = "List bounded attachment metadata for one stable IMAP message identity."
 input_schema = "schemas/attachments-input.schema.json"
 output_schema = "schemas/attachments-output.schema.json"
-permissions = ["connection.read", "email.attachments"]
+permissions = [
+    "connection.read",
+    "email.attachments",
+]
 risk = "read_only"
 destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = false
 default_timeout_ms = 30000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Read operations are bounded and cannot use Email write permissions."
+capability_wide_allowed = true
 
 [[capabilities]]
 id = "download_attachment"
 description = "Write one attachment to an approved local destination with no replacement."
 input_schema = "schemas/download_attachment-input.schema.json"
 output_schema = "schemas/download_attachment-output.schema.json"
-permissions = ["email.download_attachment", "local.write"]
-risk = "destructive"
-destructive = true
+permissions = [
+    "connection.write",
+    "email.download_attachment",
+]
+risk = "external_side_effect"
+destructive = false
 streaming = false
+execution_mode = "stateless"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = true
 default_timeout_ms = 120000
+
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+session_purposes = []
+note = "Email writes require scoped approval, redacted preview support, an invocation acknowledgement, and an idempotency key."
+capability_wide_allowed = true
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/folder"
+label = "Mailbox folder"
+value_type = "path"
+required = true
+constraint = "exact"
+risk_emphasis = "normal"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/uid_validity"
+label = "Mailbox UIDVALIDITY"
+value_type = "integer"
+required = true
+constraint = "exact"
+risk_emphasis = "normal"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/uid"
+label = "Message UID"
+value_type = "integer"
+required = true
+constraint = "exact"
+risk_emphasis = "normal"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/attachment_index"
+label = "Attachment index"
+value_type = "integer"
+required = true
+constraint = "exact"
+risk_emphasis = "normal"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/local_root"
+label = "Attachment destination root"
+value_type = "path"
+required = true
+constraint = "exact"
+risk_emphasis = "normal"
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/local_path"
+label = "Attachment destination"
+value_type = "path"
+required = true
+constraint = "exact"
+risk_emphasis = "destructive"
 
 [[capabilities]]
 id = "idle"
 description = "Observe bounded IMAP mailbox changes with reconnect, heartbeat, cursor, cancellation, and close semantics."
 input_schema = "schemas/idle-input.schema.json"
 output_schema = "schemas/idle-output.schema.json"
-permissions = ["connection.read", "email.idle"]
+permissions = [
+    "connection.read",
+    "email.idle",
+]
 risk = "read_only"
 destructive = false
-streaming = false
+streaming = true
+execution_mode = "session_only"
 connection_required = true
 required_secret_classes = []
 supports_dry_run = false
 default_timeout_ms = 30000
 
+[capabilities.authorization]
+declared = true
+interactive_execute = false
+note = "IMAP IDLE session scope is one mailbox and reconnect resumes from a UIDVALIDITY/UID checkpoint."
+capability_wide_allowed = true
+
+[[capabilities.authorization.session_purposes]]
+kind = "watch_stream"
+
+[capabilities.authorization.approval_schema]
+version = 1
+
+[[capabilities.authorization.approval_schema.fields]]
+path = "/resource/folder"
+label = "Mailbox folder"
+value_type = "path"
+required = true
+constraint = "exact"
+risk_emphasis = "normal"
+
+[capabilities.session_handoff]
+capabilities = ["email.idle"]
+
+[capabilities.session_handoff.purpose]
+kind = "watch_stream"
+
+[capabilities.session_handoff.live_session]
+protocol_version = 1
+start_risk = "read_only"
+
+[capabilities.session_handoff.live_session.kind]
+kind = "events"
+
+[capabilities.session_handoff.live_session.resource]
+resource_type = "email_mailbox"
+identity_fields = ["/folder"]
+audit_identity = "fingerprint"
+
+[capabilities.session_handoff.live_session.resource.identity_schema]
+additionalProperties = false
+required = ["folder"]
+type = "object"
+
+[capabilities.session_handoff.live_session.resource.identity_schema.properties.folder]
+maxLength = 1024
+minLength = 1
+type = "string"
+
+[capabilities.session_handoff.live_session.start_parameters_schema]
+additionalProperties = false
+type = "object"
+
+[capabilities.session_handoff.live_session.event_schema]
+additionalProperties = false
+required = [
+    "uid_validity",
+    "highest_uid",
+    "exists",
+    "highest_modseq",
+    "change_kind",
+    "message_content_omitted",
+]
+type = "object"
+
+[capabilities.session_handoff.live_session.event_schema.properties.change_kind]
+enum = [
+    "snapshot",
+    "message_arrival",
+    "mailbox_changed",
+    "uid_validity_changed",
+    "reconnected",
+]
+type = "string"
+
+[capabilities.session_handoff.live_session.event_schema.properties.exists]
+minimum = 0
+type = "integer"
+
+[capabilities.session_handoff.live_session.event_schema.properties.highest_modseq]
+minimum = 1
+type = [
+    "integer",
+    "null",
+]
+
+[capabilities.session_handoff.live_session.event_schema.properties.highest_uid]
+minimum = 0
+type = "integer"
+
+[capabilities.session_handoff.live_session.event_schema.properties.message_content_omitted]
+const = true
+
+[capabilities.session_handoff.live_session.event_schema.properties.uid_validity]
+minimum = 1
+type = "integer"
+
+[capabilities.session_handoff.live_session.operations]
+events = "email.idle"
+
+[capabilities.session_handoff.live_session.buffer]
+max_events = 512
+max_bytes = 524288
+overflow = "drop_oldest"
+
+[capabilities.session_handoff.live_session.reconnect]
+mode = "transient"
+max_attempts = 5
+initial_backoff_ms = 250
+max_backoff_ms = 4000
+resume = "best_effort_cursor"
+cursor_kind = "event_id"
+
+[capabilities.session_handoff.live_session.delivery]
+backpressure = "bounded_buffer"
+cursor_scope = "required"
+max_read_wait_ms = 30000
+
+[capabilities.session_handoff.live_session.delivery.heartbeat]
+interval_ms = 15000
+idle_timeout_ms = 60000
+
+[capabilities.session_handoff.live_session.control]
+cancel = "call_only"
+close = "stop_observation"
+
 [ui]
 tui = true
+raw_input = false
 
 [requirements]
 voidb_core = ">=0.1.0"
-platforms = ["darwin", "linux", "windows"]
+platforms = [
+    "darwin",
+    "linux",
+    "windows",
+]
