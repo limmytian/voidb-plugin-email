@@ -1,6 +1,6 @@
 id = "email"
 name = "Email Plugin"
-version = "0.3.3"
+version = "0.3.4"
 protocol_version = "1"
 description = "Email (IMAP/POP3/SMTP) remote communication and mailbox management plugin for VoidB."
 license = "Apache-2.0"
