@@ -1,13 +1,14 @@
+use std::collections::HashMap;
 use std::fs;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use voidb_core::retained_tui_quality_gate;
@@ -17,6 +18,10 @@ use crate::service::EmailService;
 use crate::types::{EmailBody, EmailEnvelope, EmailFolder};
 
 const PAGE_SIZE: u32 = 25;
+const PAGE_STEP: isize = 10;
+/// The key-hint footer is persistent and sized to stay on one line at
+/// ~120-column terminals.
+const BROWSER_HINTS: &str = "email: j/k PgUp/PgDn | / filter | F folders | Enter read | a attach | c compose | r reply | ! diag | ? help | q quit";
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,14 +60,24 @@ struct MailboxData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    Mailbox,
-    Search,
-    Reader,
-    AttachmentPlan,
+    Browser,
+    Filter,
     Compose,
     SendConfirm,
     DiscardConfirm,
+}
+
+/// Full-screen or popup surfaces stacked on top of the browser. Input is
+/// routed to the active overlay first, so each surface owns its key space
+/// instead of overloading browser keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overlay {
+    None,
+    Help,
     Diagnostics,
+    MessageViewer,
+    FolderPicker,
+    ConfirmQuit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,13 +211,22 @@ pub fn build_email_tui_evidence(launch: &EmailTuiLaunch) -> Result<Value> {
             "startup",
             "mailbox_triage",
             "folder_navigation",
+            "folder_picker",
+            "per_folder_selection_memory",
             "message_reader",
+            "message_viewer_scrollback",
             "search",
+            "live_filter_match_count",
             "attachment_plan",
             "compose",
             "send_confirmation",
             "discard_confirmation",
             "diagnostics",
+            "help_overlay",
+            "page_navigation",
+            "loading_marker",
+            "non_modal_error_banner",
+            "confirm_quit",
             "message_body_redaction",
             "resize",
             "quit_restore",
@@ -237,13 +261,16 @@ fn preflight_value(launch: &EmailTuiLaunch) -> Value {
         "views": [
             "mailbox",
             "folders",
-            "search",
-            "reader",
+            "filter",
+            "folder_picker",
+            "message_viewer",
             "attachment_plan",
             "compose",
             "send_confirm",
             "discard_confirm",
-            "diagnostics"
+            "diagnostics",
+            "help",
+            "confirm_quit"
         ],
         "side_effects": {
             "send": "explicit_confirmation_required",
@@ -383,10 +410,11 @@ fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut EmailTuiApp) -> R
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
-                    app.handle_key(key.code);
+                    app.handle_key(key);
                     terminal.draw(|frame| app.draw(frame))?;
                 }
-                Event::Resize(_, _) => {
+                Event::Resize(cols, rows) => {
+                    app.status = format!("resized email view to {cols}x{rows}");
                     terminal.draw(|frame| app.draw(frame))?;
                 }
                 _ => {}
@@ -401,14 +429,27 @@ struct EmailTuiApp {
     send_enabled: bool,
     folders: Vec<EmailFolder>,
     messages: Vec<EmailEnvelope>,
-    filtered_messages: Vec<EmailEnvelope>,
     bodies: Vec<EmailBody>,
     diagnostics: String,
     redact_transcript_text: bool,
     mode: Mode,
-    folder_index: usize,
+    overlay: Overlay,
+    /// Row held in the folder currently shown in the mailbox.
+    selected_folder: usize,
     message_index: usize,
-    search_input: String,
+    /// Per-folder selection memory: the message row held in a folder is
+    /// restored when the operator returns to it.
+    selection_memory: HashMap<String, usize>,
+    filter: String,
+    folder_filter: String,
+    folder_picker_selected: usize,
+    viewer_scroll: usize,
+    attachment_plan_visible: bool,
+    /// Set while a folder listing is in flight; renders a loading marker.
+    messages_pending: bool,
+    /// Set while a message body fetch is in flight; renders a loading marker.
+    body_pending: bool,
+    error_banner: Option<String>,
     status: String,
     should_quit: bool,
     draft: Option<ComposeDraft>,
@@ -421,26 +462,33 @@ impl EmailTuiApp {
         send_enabled: bool,
         data: MailboxData,
     ) -> Self {
-        let mut app = Self {
+        Self {
             profile_label,
             config,
             send_enabled,
             folders: data.folders,
-            filtered_messages: data.messages.clone(),
             messages: data.messages,
             bodies: data.bodies,
             diagnostics: data.diagnostics,
             redact_transcript_text: data.redact_transcript_text,
-            mode: Mode::Mailbox,
-            folder_index: 0,
+            mode: Mode::Browser,
+            overlay: Overlay::None,
+            selected_folder: 0,
             message_index: 0,
-            search_input: String::new(),
-            status: "mailbox loaded; q quits, / searches, Enter opens reader".to_string(),
+            selection_memory: HashMap::new(),
+            filter: String::new(),
+            folder_filter: String::new(),
+            folder_picker_selected: 0,
+            viewer_scroll: 0,
+            attachment_plan_visible: false,
+            messages_pending: false,
+            body_pending: false,
+            error_banner: None,
+            status: "mailbox loaded; j/k moves, / filters, Enter opens the message viewer"
+                .to_string(),
             should_quit: false,
             draft: None,
-        };
-        app.apply_search();
-        app
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame<'_>) {
@@ -456,27 +504,84 @@ impl EmailTuiApp {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                // Header and status each carry two content rows (title +
+                // context, status + hints) on top of their borders, matching
+                // the family-wide Length(4) panels.
+                Constraint::Length(4),
                 Constraint::Min(10),
                 Constraint::Length(4),
             ])
             .split(area);
 
-        self.draw_header(frame, vertical[0]);
+        frame.render_widget(self.header(), vertical[0]);
         self.draw_content(frame, vertical[1]);
-        self.draw_footer(frame, vertical[2]);
+        frame.render_widget(self.status_panel(), vertical[2]);
 
-        if self.mode == Mode::Search {
-            self.draw_search_modal(frame, area);
+        if matches!(
+            self.mode,
+            Mode::Compose | Mode::SendConfirm | Mode::DiscardConfirm
+        ) {
+            self.draw_compose_overlay(frame, area);
+        }
+        match self.overlay {
+            Overlay::None => {}
+            Overlay::Help => self.draw_help(frame, area),
+            Overlay::Diagnostics => self.draw_diagnostics(frame, area),
+            Overlay::MessageViewer => self.draw_message_viewer(frame, area),
+            Overlay::FolderPicker => self.draw_folder_picker(frame, area),
+            Overlay::ConfirmQuit => self.draw_confirm_quit(frame, area),
+        }
+        if let Some(error) = &self.error_banner {
+            self.draw_error_banner(frame, area, error);
         }
     }
 
-    fn draw_header(&self, frame: &mut Frame<'_>, area: Rect) {
-        let title = format!("Email - {} - {}", self.profile_label, self.diagnostics);
-        let header = Paragraph::new(title)
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Cyan));
-        frame.render_widget(header, area);
+    fn header(&self) -> Paragraph<'_> {
+        let listing = if self.messages_pending || self.body_pending {
+            " \u{27f3}"
+        } else {
+            ""
+        };
+        let send_label = if self.send_enabled {
+            "confirmation-gated"
+        } else {
+            "fixture-local"
+        };
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled("Email TUI", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!(
+                    " | profile {} | {}",
+                    self.profile_label, self.diagnostics
+                )),
+            ]),
+            Line::from(format!(
+                "source {} | folders {} | messages {}/{} | filter {} | send {}{listing}",
+                self.source_label(),
+                self.folders.len(),
+                self.filtered_messages().len(),
+                self.messages.len(),
+                self.filter_label(),
+                send_label
+            )),
+        ])
+        .block(Block::default().borders(Borders::ALL))
+    }
+
+    fn source_label(&self) -> &'static str {
+        if self.config.is_some() {
+            "profile"
+        } else {
+            "fixture"
+        }
+    }
+
+    fn filter_label(&self) -> String {
+        if self.filter.is_empty() {
+            "-".to_string()
+        } else {
+            safe_inline(&self.filter, 24)
+        }
     }
 
     fn draw_content(&mut self, frame: &mut Frame<'_>, area: Rect) {
@@ -490,236 +595,293 @@ impl EmailTuiApp {
             .split(area);
         self.draw_folders(frame, chunks[0]);
         self.draw_messages(frame, chunks[1]);
-        match self.mode {
-            Mode::Reader => self.draw_reader(frame, chunks[2]),
-            Mode::AttachmentPlan => self.draw_attachment_plan(frame, chunks[2]),
-            Mode::Compose | Mode::SendConfirm | Mode::DiscardConfirm => {
-                self.draw_compose(frame, chunks[2])
-            }
-            Mode::Diagnostics => self.draw_diagnostics(frame, chunks[2]),
-            _ => self.draw_preview(frame, chunks[2]),
-        }
+        self.draw_preview(frame, chunks[2]);
     }
 
     fn draw_folders(&self, frame: &mut Frame<'_>, area: Rect) {
-        let items = if self.folders.is_empty() {
-            vec![ListItem::new("No folders")]
+        let visible = area.height.saturating_sub(2).max(1) as usize;
+        let start = window_start(self.selected_folder, visible, self.folders.len());
+        let lines = if self.folders.is_empty() {
+            vec![Line::from("No folders")]
         } else {
             self.folders
                 .iter()
-                .map(|folder| {
-                    ListItem::new(format!(
-                        "{} ({}/{})",
-                        truncate(&folder.display_name, 15),
-                        folder.unread_count,
-                        folder.message_count
+                .enumerate()
+                .skip(start)
+                .take(visible)
+                .map(|(idx, folder)| {
+                    let marker = if idx == self.selected_folder {
+                        "> "
+                    } else {
+                        "  "
+                    };
+                    let style = if idx == self.selected_folder {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Green)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    Line::from(Span::styled(
+                        format!(
+                            "{marker}{} ({}/{})",
+                            truncate(&folder.display_name, 15),
+                            folder.unread_count,
+                            folder.message_count
+                        ),
+                        style,
                     ))
                 })
-                .collect()
+                .collect::<Vec<_>>()
         };
-        let mut state = ListState::default();
-        if !self.folders.is_empty() {
-            state.select(Some(self.folder_index.min(self.folders.len() - 1)));
-        }
-        let list = List::new(items)
-            .block(Block::default().title("Folders").borders(Borders::ALL))
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        frame.render_stateful_widget(list, area, &mut state);
+        let title = format!(
+            " Folders ({}/{}) ",
+            (self.selected_folder + 1).min(self.folders.len().max(1)),
+            self.folders.len()
+        );
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(Block::default().title(title).borders(Borders::ALL))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 
     fn draw_messages(&self, frame: &mut Frame<'_>, area: Rect) {
-        let items = if self.filtered_messages.is_empty() {
-            vec![ListItem::new("No messages")]
-        } else {
-            self.filtered_messages
+        let items = self.filtered_messages();
+        let visible = area.height.saturating_sub(2).max(1) as usize;
+        let start = window_start(self.message_index, visible, items.len());
+        let lines = if !items.is_empty() {
+            items
                 .iter()
-                .map(|message| {
+                .enumerate()
+                .skip(start)
+                .take(visible)
+                .map(|(idx, message)| {
+                    let marker = if idx == self.message_index {
+                        "> "
+                    } else {
+                        "  "
+                    };
+                    let style = if idx == self.message_index {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Green)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
                     let seen = if message.seen { " " } else { "*" };
-                    ListItem::new(Line::from(vec![
-                        Span::styled(seen, Style::default().fg(Color::Yellow)),
-                        Span::raw(" "),
-                        Span::styled(
+                    Line::from(Span::styled(
+                        format!(
+                            "{marker}{seen} {} {}",
                             truncate(&message.from, 18),
-                            Style::default().fg(Color::Green),
+                            truncate(&message.subject, 28)
                         ),
-                        Span::raw(" "),
-                        Span::raw(truncate(&message.subject, 28)),
-                    ]))
+                        style,
+                    ))
                 })
-                .collect()
-        };
-        let mut state = ListState::default();
-        if !self.filtered_messages.is_empty() {
-            state.select(Some(
-                self.message_index.min(self.filtered_messages.len() - 1),
-            ));
-        }
-        let title = if self.search_input.is_empty() {
-            "Messages".to_string()
+                .collect::<Vec<_>>()
+        } else if self.messages_pending {
+            vec![Line::from("loading\u{2026}")]
         } else {
-            format!("Messages /{}", self.search_input)
+            vec![Line::from(
+                "No messages. Press / to filter or F to pick a folder.",
+            )]
         };
-        let list = List::new(items)
-            .block(Block::default().title(title).borders(Borders::ALL))
-            .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-        frame.render_stateful_widget(list, area, &mut state);
+        let listing = if self.messages_pending {
+            " \u{27f3}"
+        } else {
+            ""
+        };
+        let folder_label = self
+            .folders
+            .get(self.selected_folder)
+            .map(|folder| truncate(&folder.display_name, 12))
+            .unwrap_or_else(|| "mailbox".to_string());
+        let title = if self.filter.is_empty() {
+            format!(
+                " Messages \u{b7} {} ({}/{}){listing} ",
+                folder_label,
+                (self.message_index + 1).min(items.len().max(1)),
+                items.len()
+            )
+        } else {
+            format!(
+                " Messages \u{b7} {} \u{b7} '{}' {}/{}{listing} ",
+                folder_label,
+                safe_inline(&self.filter, 16),
+                items.len(),
+                self.messages.len()
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(Block::default().title(title).borders(Borders::ALL))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 
     fn draw_preview(&self, frame: &mut Frame<'_>, area: Rect) {
-        let text = if let Some(message) = self.selected_message() {
+        let mut lines = if let Some(message) = self.selected_message() {
             vec![
                 Line::from(format!("From: {}", message.from)),
                 Line::from(format!("Subject: {}", message.subject)),
                 Line::from(format!("Date: {}", message.date)),
+                Line::from(format!(
+                    "Seen: {} \u{b7} Size: {} bytes",
+                    message.seen, message.size
+                )),
                 Line::from(""),
-                Line::from("Press Enter to open reader."),
-                Line::from("Press a for attachment metadata plan."),
+                Line::from("Enter opens the full-screen message viewer."),
             ]
         } else {
             vec![
-                Line::from("No selected message."),
-                Line::from("Use / to search or f to change folders."),
+                Line::from("No message selected."),
+                Line::from("Press / to filter or F to pick a folder."),
             ]
         };
-        let paragraph = Paragraph::new(text)
-            .block(Block::default().title("Preview").borders(Borders::ALL))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, area);
-    }
 
-    fn draw_reader(&self, frame: &mut Frame<'_>, area: Rect) {
-        let lines = if let Some(body) = self.selected_body() {
-            let mut lines = vec![
-                Line::from(format!("From: {}", body.from)),
-                Line::from(format!("To: {}", body.to.join(", "))),
-                Line::from(format!("Subject: {}", body.subject)),
-                Line::from(format!("Date: {}", body.date)),
-                Line::from(""),
-            ];
-            for line in body.text.lines().take(18) {
-                lines.push(Line::from(line.to_string()));
-            }
-            lines
-        } else if let Some(message) = self.selected_message() {
-            vec![
-                Line::from(format!("From: {}", message.from)),
-                Line::from(format!("Subject: {}", message.subject)),
-                Line::from(""),
-                Line::from("Body not loaded in the current cache."),
-                Line::from("CLI fallback: voidb-cli email read --connection <name> <folder> <uid>"),
-            ]
-        } else {
-            vec![Line::from("No message selected.")]
-        };
-        let paragraph = Paragraph::new(lines)
-            .block(Block::default().title("Reader").borders(Borders::ALL))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, area);
-    }
-
-    fn draw_attachment_plan(&self, frame: &mut Frame<'_>, area: Rect) {
-        let lines = if let Some(body) = self.selected_body() {
-            if body.attachments.is_empty() {
-                vec![Line::from("No attachments on selected message.")]
-            } else {
-                let mut lines = vec![
-                    Line::from("Attachment metadata only. No file is opened or written."),
-                    Line::from("d: plan download | o: plan open | Esc: mailbox"),
-                    Line::from(""),
-                ];
-                for attachment in &body.attachments {
-                    lines.push(Line::from(format!(
-                        "{} | {} | {} bytes",
-                        attachment.filename, attachment.content_type, attachment.size
-                    )));
-                }
-                lines
-            }
-        } else {
-            vec![
-                Line::from("Attachment metadata requires a loaded message body."),
-                Line::from("Fixture mode can provide bodies without target access."),
-            ]
-        };
-        let paragraph = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .title("Attachment Plan")
-                    .borders(Borders::ALL),
-            )
-            .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, area);
-    }
-
-    fn draw_footer(&self, frame: &mut Frame<'_>, area: Rect) {
-        let keys = match self.mode {
-            Mode::Compose => "Tab field | F5 review send | Esc discard/back",
-            Mode::SendConfirm => "y send | n cancel | Esc compose",
-            Mode::DiscardConfirm => "y discard | n keep draft",
-            Mode::AttachmentPlan => "d plan download | o plan open | Esc back",
-            _ => {
-                "q quit | j/k move | / search | Enter reader | a attachments | c compose | r reply | ! diagnostics"
-            }
-        };
-        let footer = Paragraph::new(vec![Line::from(keys), Line::from(self.status.clone())])
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Gray));
-        frame.render_widget(footer, area);
-    }
-
-    fn draw_compose(&self, frame: &mut Frame<'_>, area: Rect) {
-        let Some(draft) = &self.draft else {
-            let paragraph = Paragraph::new("No active draft.")
-                .block(Block::default().title("Compose").borders(Borders::ALL));
-            frame.render_widget(paragraph, area);
-            return;
-        };
-
-        let mut lines: Vec<Line<'static>> = vec![
-            compose_line("To", &draft.to, draft.field == DraftField::To),
-            compose_line("Cc", &draft.cc, draft.field == DraftField::Cc),
-            compose_line(
-                "Subject",
-                &draft.subject,
-                draft.field == DraftField::Subject,
-            ),
-            Line::from(""),
-            compose_line("Body", "", draft.field == DraftField::Body),
-        ];
-        if self.redact_transcript_text && !draft.body.is_empty() {
-            lines.push(Line::from("[draft body redacted for transcript evidence]"));
-        } else if draft.body.is_empty() {
-            lines.push(Line::from("(empty body)"));
-        } else {
-            for line in draft.body.lines().take(14) {
-                lines.push(Line::from(line.to_string()));
-            }
-        }
-
-        if self.mode == Mode::SendConfirm {
+        if self.attachment_plan_visible {
             lines.push(Line::from(""));
-            lines.push(Line::from(format!(
-                "Confirm send to {} recipient(s), subject '{}'? y/n",
-                recipient_count(&draft.to, &draft.cc),
-                safe_subject(&draft.subject)
+            lines.push(Line::from(Span::styled(
+                "attachment plan (metadata only)",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )));
-        } else if self.mode == Mode::DiscardConfirm {
-            lines.push(Line::from(""));
-            lines.push(Line::from("Discard non-empty draft? y/n"));
-        } else {
-            lines.push(Line::from(""));
             lines.push(Line::from(
-                "F5 reviews send. Esc asks before discarding non-empty drafts.",
+                "No file is opened or written; d/o only stage a plan description.",
             ));
+            if let Some(body) = self.selected_body() {
+                if body.attachments.is_empty() {
+                    lines.push(Line::from("No attachments on selected message."));
+                } else {
+                    for attachment in &body.attachments {
+                        lines.push(Line::from(format!(
+                            "{} | {} | {} bytes",
+                            attachment.filename, attachment.content_type, attachment.size
+                        )));
+                    }
+                }
+            } else {
+                lines.push(Line::from(
+                    "Attachment metadata requires a loaded message body.",
+                ));
+                lines.push(Line::from(
+                    "Fixture mode can provide bodies without target access.",
+                ));
+            }
         }
 
-        let paragraph = Paragraph::new(lines)
-            .block(Block::default().title("Compose").borders(Borders::ALL))
-            .wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(Block::default().title(" Preview ").borders(Borders::ALL))
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+    }
+
+    fn status_panel(&self) -> Paragraph<'_> {
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(
+                    format!("{} ", mode_label(self.mode)),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(&self.status),
+            ]),
+            Line::from(Span::styled(
+                self.hint_footer(),
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .block(Block::default().borders(Borders::ALL).title(" Status "))
+    }
+
+    fn hint_footer(&self) -> String {
+        if let Some(hint) = match self.overlay {
+            Overlay::Help => Some("help: any key closes".to_string()),
+            Overlay::Diagnostics => Some("diagnostics: any key closes".to_string()),
+            Overlay::MessageViewer => {
+                Some("viewer: j/k PgUp/PgDn scroll | g/G home/end | Esc close".to_string())
+            }
+            Overlay::FolderPicker => {
+                Some("picker: type to narrow | Enter switch | Esc close".to_string())
+            }
+            Overlay::ConfirmQuit => Some("quit: y/Enter quit | any other key stays".to_string()),
+            Overlay::None => None,
+        } {
+            return hint;
+        }
+        match self.mode {
+            Mode::Filter => format!(
+                "filter: {}\u{258f} Enter apply \u{b7} Esc clear \u{b7} {} match(es)",
+                safe_inline(&self.filter, 32),
+                self.filtered_messages().len()
+            ),
+            Mode::Compose => "Tab field | F5 review send | Esc discard/back".to_string(),
+            Mode::SendConfirm => "y send | n cancel | Esc compose".to_string(),
+            Mode::DiscardConfirm => "y discard | n keep draft".to_string(),
+            Mode::Browser => BROWSER_HINTS.to_string(),
+        }
+    }
+
+    fn draw_help(&self, frame: &mut Frame<'_>, area: Rect) {
+        let popup = centered_rect(78, 84, area);
+        frame.render_widget(Clear, popup);
+        let help = vec![
+            Line::from(Span::styled(
+                "Email TUI help",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Navigation",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from("j/k or arrows move \u{b7} PgUp/PgDn page \u{b7} g/G home/end"),
+            Line::from("the message row is remembered per folder and restored on return"),
+            Line::from("/ live filter over sender and subject (Enter applies, Esc clears)"),
+            Line::from("F folder picker (type to narrow, Enter switches) \u{b7} f next folder"),
+            Line::from(Span::styled(
+                "Reading",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from("Enter: full-screen scrollable message viewer (j/k PgUp/PgDn scroll)"),
+            Line::from("a: attachment metadata plan \u{b7} bodies are fetched read-only"),
+            Line::from("!: provider diagnostics (redacted, category-oriented)"),
+            Line::from(Span::styled(
+                "Compose (staged draft, F5 review)",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from("c: new draft \u{b7} r: reply draft \u{b7} Tab cycles fields"),
+            Line::from("F5 reviews the send; y confirms, n keeps the draft."),
+            Line::from("Esc asks before discarding a non-empty draft."),
+            Line::from(Span::styled(
+                "Sessions",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from("q: quit (asks for confirmation while a fetch is in flight)"),
+            Line::from("Background failures surface as a non-modal banner; any key acknowledges."),
+            Line::from(""),
+            Line::from("Press any key to return."),
+        ];
+        frame.render_widget(
+            Paragraph::new(help)
+                .block(Block::default().title(" Help ").borders(Borders::ALL))
+                .wrap(Wrap { trim: false }),
+            popup,
+        );
     }
 
     fn draw_diagnostics(&self, frame: &mut Frame<'_>, area: Rect) {
+        let popup = centered_rect(70, 62, area);
+        frame.render_widget(Clear, popup);
         let lines = vec![
             Line::from("Provider diagnostics"),
             Line::from(""),
@@ -736,193 +898,672 @@ impl EmailTuiApp {
                 "No message body, attachment bytes, password, or raw provider greeting is shown.",
             ),
         ];
-        let paragraph = Paragraph::new(lines)
-            .block(Block::default().title("Diagnostics").borders(Borders::ALL))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(paragraph, area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .title(" Diagnostics ")
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: true }),
+            popup,
+        );
     }
 
-    fn draw_search_modal(&self, frame: &mut Frame<'_>, area: Rect) {
-        let modal = centered_rect(60, 20, area);
-        frame.render_widget(Clear, modal);
-        let paragraph = Paragraph::new(format!("/{}", self.search_input))
-            .block(
-                Block::default()
-                    .title("Search sender or subject")
-                    .borders(Borders::ALL),
-            )
-            .style(Style::default().fg(Color::White));
-        frame.render_widget(paragraph, modal);
+    fn message_viewer_lines(&self) -> Vec<Line<'static>> {
+        if let Some(body) = self.selected_body() {
+            let mut lines = vec![
+                Line::from(format!("From: {}", body.from)),
+                Line::from(format!("To: {}", body.to.join(", "))),
+                if body.cc.is_empty() {
+                    Line::from("Cc: -")
+                } else {
+                    Line::from(format!("Cc: {}", body.cc.join(", ")))
+                },
+                Line::from(format!("Subject: {}", body.subject)),
+                Line::from(format!("Date: {}", body.date)),
+                Line::from(""),
+            ];
+            for line in body.text.lines() {
+                lines.push(Line::from(line.to_string()));
+            }
+            lines.push(Line::from(""));
+            if body.attachments.is_empty() {
+                lines.push(Line::from("No attachments."));
+            } else {
+                lines.push(Line::from(
+                    "Attachments (metadata only; nothing opens or executes):",
+                ));
+                for attachment in &body.attachments {
+                    lines.push(Line::from(format!(
+                        "{} | {} | {} bytes",
+                        attachment.filename, attachment.content_type, attachment.size
+                    )));
+                }
+            }
+            lines
+        } else if let Some(message) = self.selected_message() {
+            vec![
+                Line::from(format!("From: {}", message.from)),
+                Line::from(format!("Subject: {}", message.subject)),
+                Line::from(""),
+                Line::from("Body not loaded in the current cache."),
+                Line::from("CLI fallback: voidb-cli email read --connection <name> <folder> <uid>"),
+            ]
+        } else {
+            vec![Line::from("No message selected.")]
+        }
     }
 
-    fn handle_key(&mut self, code: KeyCode) {
-        if self.mode == Mode::Search {
-            self.handle_search_key(code);
-            return;
+    fn draw_message_viewer(&self, frame: &mut Frame<'_>, area: Rect) {
+        let popup = centered_rect(88, 82, area);
+        frame.render_widget(Clear, popup);
+        let lines = self.message_viewer_lines();
+        let visible = popup.height.saturating_sub(2).max(1) as usize;
+        let total = lines.len();
+        let start = self.viewer_scroll.min(total.saturating_sub(1));
+        let body: Vec<Line> = if total == 0 {
+            vec![Line::from("no message content")]
+        } else {
+            lines
+                .into_iter()
+                .skip(start)
+                .take(visible)
+                .collect::<Vec<_>>()
+        };
+        frame.render_widget(
+            Paragraph::new(body)
+                .block(Block::default()
+                    .title(format!(
+                        " Message \u{b7} line {}/{} \u{b7} j/k PgUp/PgDn scroll \u{b7} Esc close ",
+                        (start + 1).min(total),
+                        total
+                    ))
+                    .borders(Borders::ALL))
+                .wrap(Wrap { trim: false }),
+            popup,
+        );
+    }
+
+    fn draw_folder_picker(&self, frame: &mut Frame<'_>, area: Rect) {
+        let popup = centered_rect(60, 60, area);
+        frame.render_widget(Clear, popup);
+        let matches = self.filtered_folders();
+        let visible = popup.height.saturating_sub(5).max(1) as usize;
+        let start = window_start(self.folder_picker_selected, visible, matches.len());
+        let mut lines = vec![
+            Line::from(Span::styled(
+                format!("filter: {}\u{258f}", self.folder_filter),
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+        ];
+        if matches.is_empty() {
+            lines.push(Line::from("no folder matches the picker filter"));
+        } else {
+            lines.extend(matches.iter().enumerate().skip(start).take(visible).map(
+                |(idx, folder)| {
+                    let marker = if idx == self.selected_folder {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    let style = if idx == self.folder_picker_selected {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Green)
+                            .add_modifier(Modifier::BOLD)
+                    } else if idx == self.selected_folder {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    Line::from(Span::styled(
+                        format!(
+                            "{marker}{} ({}/{})",
+                            truncate(&folder.display_name, 24),
+                            folder.unread_count,
+                            folder.message_count
+                        ),
+                        style,
+                    ))
+                },
+            ));
+        }
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(Block::default()
+                    .title(format!(
+                        " Folders {}/{} \u{b7} type to narrow \u{b7} Enter switch \u{b7} Esc close ",
+                        (self.folder_picker_selected + 1).min(matches.len().max(1)),
+                        matches.len()
+                    ))
+                    .borders(Borders::ALL))
+                .wrap(Wrap { trim: false }),
+            popup,
+        );
+    }
+
+    fn draw_compose_overlay(&self, frame: &mut Frame<'_>, area: Rect) {
+        let popup = centered_rect(64, 78, area);
+        frame.render_widget(Clear, popup);
+        let mut lines: Vec<Line<'static>> = match &self.draft {
+            Some(draft) => {
+                let mut lines = vec![
+                    compose_line("To", &draft.to, draft.field == DraftField::To),
+                    compose_line("Cc", &draft.cc, draft.field == DraftField::Cc),
+                    compose_line(
+                        "Subject",
+                        &draft.subject,
+                        draft.field == DraftField::Subject,
+                    ),
+                    Line::from(""),
+                    compose_line("Body", "", draft.field == DraftField::Body),
+                ];
+                if self.redact_transcript_text && !draft.body.is_empty() {
+                    lines.push(Line::from("[draft body redacted for transcript evidence]"));
+                } else if draft.body.is_empty() {
+                    lines.push(Line::from("(empty body)"));
+                } else {
+                    for line in draft.body.lines().take(14) {
+                        lines.push(Line::from(line.to_string()));
+                    }
+                }
+                lines
+            }
+            None => vec![Line::from("No active draft.")],
+        };
+
+        match self.mode {
+            Mode::SendConfirm => {
+                if let Some(draft) = &self.draft {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(format!(
+                        "Confirm send to {} recipient(s), subject '{}'? y/n",
+                        recipient_count(&draft.to, &draft.cc),
+                        safe_subject(&draft.subject)
+                    )));
+                }
+            }
+            Mode::DiscardConfirm => {
+                lines.push(Line::from(""));
+                lines.push(Line::from("Discard non-empty draft? y/n"));
+            }
+            _ => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(
+                    "F5 reviews send. Esc asks before discarding non-empty drafts.",
+                ));
+            }
         }
 
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(Block::default().title(" Compose ").borders(Borders::ALL))
+                .wrap(Wrap { trim: false }),
+            popup,
+        );
+    }
+
+    fn draw_confirm_quit(&self, frame: &mut Frame<'_>, area: Rect) {
+        let popup = centered_rect(62, 22, area);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "Quit with active work?",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(self.active_work_summary()),
+                Line::from("y/Enter: quit \u{b7} any other key: stay"),
+            ])
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Confirm Quit "),
+            )
+            .wrap(Wrap { trim: false }),
+            popup,
+        );
+    }
+
+    fn active_work_summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.messages_pending {
+            parts.push("folder listing in flight".to_string());
+        }
+        if self.body_pending {
+            parts.push("message body fetch in flight".to_string());
+        }
+        if parts.is_empty() {
+            "no fetches in flight".to_string()
+        } else {
+            parts.join(", ")
+        }
+    }
+
+    fn draw_error_banner(&self, frame: &mut Frame<'_>, area: Rect, error: &str) {
+        let banner = Rect {
+            x: area.x + 1,
+            y: area.height.saturating_sub(6),
+            width: area.width.saturating_sub(2),
+            height: 3,
+        };
+        frame.render_widget(Clear, banner);
+        frame.render_widget(
+            Paragraph::new(vec![Line::from(Span::styled(
+                safe_error_summary(error),
+                Style::default().fg(Color::Red),
+            ))])
+            .block(
+                Block::default()
+                    .title(" Error (any key acknowledges) ")
+                    .borders(Borders::ALL)
+                    .style(Style::default().fg(Color::Red)),
+            )
+            .wrap(Wrap { trim: false }),
+            banner,
+        );
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) {
+        // The error banner is informational: any key acknowledges it while
+        // the key itself keeps its normal meaning, so background failures
+        // never trap the operator in a modal.
+        self.error_banner = None;
+        // Overlay-first routing for stacked surfaces.
+        match self.overlay {
+            Overlay::None => {}
+            Overlay::Help => {
+                self.overlay = Overlay::None;
+                self.status = "help closed".to_string();
+                return;
+            }
+            Overlay::Diagnostics => {
+                self.overlay = Overlay::None;
+                self.status = "diagnostics closed".to_string();
+                return;
+            }
+            Overlay::MessageViewer => {
+                self.handle_message_viewer_key(key);
+                return;
+            }
+            Overlay::FolderPicker => {
+                self.handle_folder_picker_key(key);
+                return;
+            }
+            Overlay::ConfirmQuit => {
+                self.handle_confirm_quit_key(key);
+                return;
+            }
+        }
         if matches!(
             self.mode,
             Mode::Compose | Mode::SendConfirm | Mode::DiscardConfirm
         ) {
-            self.handle_compose_key(code);
+            self.handle_compose_key(key);
+            return;
+        }
+        if self.mode == Mode::Filter {
+            self.handle_filter_key(key);
             return;
         }
 
-        if self.mode == Mode::AttachmentPlan {
-            match code {
-                KeyCode::Char('d') => {
-                    self.status =
-                        "download plan requires a local path and confirmation; no file written"
-                            .to_string();
-                    return;
-                }
-                KeyCode::Char('o') => {
-                    self.status =
-                        "open plan requires confirmation; no external viewer launched".to_string();
-                    return;
-                }
-                _ => {}
+        match key.code {
+            KeyCode::Char('q') => self.request_quit(),
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::PageUp => self.move_selection(-PAGE_STEP),
+            KeyCode::PageDown => self.move_selection(PAGE_STEP),
+            KeyCode::Home | KeyCode::Char('g') => self.set_selected(0),
+            KeyCode::End | KeyCode::Char('G') => {
+                let len = self.filtered_messages().len();
+                self.set_selected(len.saturating_sub(1));
             }
-        }
-
-        match code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('j') | KeyCode::Down => self.next_message(),
-            KeyCode::Char('k') | KeyCode::Up => self.previous_message(),
-            KeyCode::Char('f') => self.next_folder(),
+            KeyCode::Enter => self.open_message_viewer(),
             KeyCode::Char('/') => {
-                self.mode = Mode::Search;
-                self.status = "type search text; Enter applies; Esc cancels".to_string();
+                self.mode = Mode::Filter;
+                self.status = "filter: type to narrow live, Enter apply, Esc clear".to_string();
             }
-            KeyCode::Enter => {
-                self.mode = Mode::Reader;
-                self.status = "reader is local; Esc returns to mailbox".to_string();
+            KeyCode::Char('f') => self.next_folder(),
+            KeyCode::Char('F') => self.open_folder_picker(),
+            KeyCode::Char('a') => self.toggle_attachment_plan(),
+            KeyCode::Char('d') if self.attachment_plan_visible => {
+                self.status =
+                    "download plan requires a local path and confirmation; no file written"
+                        .to_string();
+            }
+            KeyCode::Char('o') if self.attachment_plan_visible => {
+                self.status =
+                    "open plan requires confirmation; no external viewer launched".to_string();
             }
             KeyCode::Char('c') => self.start_compose(),
             KeyCode::Char('r') => self.start_reply(),
-            KeyCode::Char('a') => {
-                self.mode = Mode::AttachmentPlan;
-                self.status = "attachment plan is metadata-only; no auto-open".to_string();
-            }
             KeyCode::Char('!') => {
-                self.mode = Mode::Diagnostics;
+                self.overlay = Overlay::Diagnostics;
                 self.status = "diagnostics are redacted and category-oriented".to_string();
             }
-            KeyCode::Esc => {
-                self.mode = Mode::Mailbox;
-                self.status = "mailbox mode".to_string();
+            KeyCode::Char('?') => {
+                self.overlay = Overlay::Help;
+                self.status = "help open; any key closes".to_string();
             }
-            _ => {}
+            KeyCode::Esc => {
+                if !self.filter.is_empty() {
+                    self.filter.clear();
+                    self.set_selected(0);
+                    self.status = "filter cleared".to_string();
+                } else if self.attachment_plan_visible {
+                    self.attachment_plan_visible = false;
+                    self.status = "attachment plan hidden".to_string();
+                } else {
+                    self.status = format!("email: {BROWSER_HINTS}");
+                }
+            }
+            _ => {
+                self.status = format!("email: {BROWSER_HINTS}");
+            }
         }
     }
 
-    fn handle_compose_key(&mut self, code: KeyCode) {
-        match self.mode {
-            Mode::SendConfirm => match code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => self.confirm_send(),
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    self.mode = Mode::Compose;
-                    self.status = "send canceled; draft preserved".to_string();
-                }
-                _ => {}
-            },
-            Mode::DiscardConfirm => match code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    self.draft = None;
-                    self.mode = Mode::Mailbox;
-                    self.status = "draft discarded".to_string();
-                }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                    self.mode = Mode::Compose;
-                    self.status = "draft preserved".to_string();
-                }
-                _ => {}
-            },
-            Mode::Compose => match code {
-                KeyCode::Tab => self.next_draft_field(),
-                KeyCode::Backspace => self.pop_draft_char(),
-                KeyCode::Enter => self.enter_draft_newline_or_next_field(),
-                KeyCode::F(5) => self.review_send(),
-                KeyCode::Esc => self.request_discard_or_close(),
-                KeyCode::Char(c) if !c.is_control() => self.push_draft_char(c),
-                _ => {}
-            },
-            _ => {}
-        }
-    }
-
-    fn handle_search_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Esc => {
-                self.mode = Mode::Mailbox;
-                self.status = "search canceled".to_string();
-            }
+    fn handle_filter_key(&mut self, key: KeyEvent) {
+        match key.code {
             KeyCode::Enter => {
-                self.apply_search();
-                self.mode = Mode::Mailbox;
-                self.status = format!("{} matching messages", self.filtered_messages.len());
+                self.mode = Mode::Browser;
+                self.set_selected(0);
+                self.status = format!(
+                    "filter applied: {} ({} matches)",
+                    self.filter_label(),
+                    self.filtered_messages().len()
+                );
+            }
+            KeyCode::Esc => {
+                self.filter.clear();
+                self.mode = Mode::Browser;
+                self.set_selected(0);
+                self.status = "filter cleared".to_string();
             }
             KeyCode::Backspace => {
-                self.search_input.pop();
-                self.apply_search();
+                self.filter.pop();
+                self.set_selected(0);
             }
-            KeyCode::Char(c) if !c.is_control() => {
-                self.search_input.push(c);
-                self.apply_search();
+            KeyCode::Char(ch) if !ch.is_control() => {
+                self.filter.push(ch);
+                self.set_selected(0);
             }
             _ => {}
         }
     }
 
-    fn next_message(&mut self) {
-        if self.filtered_messages.is_empty() {
-            return;
+    fn handle_message_viewer_key(&mut self, key: KeyEvent) {
+        let max_scroll = self.message_viewer_lines().len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.overlay = Overlay::None;
+                self.status = "message viewer closed".to_string();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.viewer_scroll = self.viewer_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.viewer_scroll = (self.viewer_scroll + 1).min(max_scroll);
+            }
+            KeyCode::PageUp => {
+                self.viewer_scroll = self.viewer_scroll.saturating_sub(PAGE_STEP as usize)
+            }
+            KeyCode::PageDown => {
+                self.viewer_scroll = (self.viewer_scroll + PAGE_STEP as usize).min(max_scroll)
+            }
+            KeyCode::Home | KeyCode::Char('g') => self.viewer_scroll = 0,
+            KeyCode::End | KeyCode::Char('G') => self.viewer_scroll = max_scroll,
+            _ => {}
         }
-        self.message_index = (self.message_index + 1).min(self.filtered_messages.len() - 1);
     }
 
-    fn previous_message(&mut self) {
-        self.message_index = self.message_index.saturating_sub(1);
+    fn handle_folder_picker_key(&mut self, key: KeyEvent) {
+        let matches = self.filtered_folders().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.overlay = Overlay::None;
+                self.status = "folder picker closed".to_string();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.folder_picker_selected = self.folder_picker_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if matches > 0 {
+                    self.folder_picker_selected =
+                        (self.folder_picker_selected + 1).min(matches - 1);
+                }
+            }
+            KeyCode::Enter => self.apply_folder_selection(),
+            KeyCode::Backspace => {
+                self.folder_filter.pop();
+                self.folder_picker_selected = 0;
+            }
+            KeyCode::Char(ch) if !ch.is_control() => {
+                self.folder_filter.push(ch);
+                self.folder_picker_selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_confirm_quit_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                self.should_quit = true;
+            }
+            _ => {
+                self.overlay = Overlay::None;
+                self.status = "quit cancelled".to_string();
+            }
+        }
+    }
+
+    /// Quit immediately when no fetch is in flight; otherwise stage the
+    /// non-modal confirmation overlay so a stray `q` cannot kill an in-flight
+    /// folder listing or body fetch unnoticed. Compose owns `q` as draft text,
+    /// so drafts are guarded by the discard confirmation instead.
+    fn request_quit(&mut self) {
+        if self.messages_pending || self.body_pending {
+            self.overlay = Overlay::ConfirmQuit;
+            self.status = "quit? a fetch is in flight: y quits, any other key stays".to_string();
+            return;
+        }
+        self.should_quit = true;
+    }
+
+    fn open_folder_picker(&mut self) {
+        if self.folders.is_empty() {
+            self.status = "no folders loaded".to_string();
+            return;
+        }
+        self.folder_filter.clear();
+        self.folder_picker_selected = self.selected_folder;
+        self.overlay = Overlay::FolderPicker;
+        self.status = "folder picker: type to narrow, Enter switches, Esc closes".to_string();
+    }
+
+    fn filtered_folders(&self) -> Vec<&EmailFolder> {
+        let needle = self.folder_filter.to_lowercase();
+        self.folders
+            .iter()
+            .filter(|folder| {
+                needle.is_empty()
+                    || folder.display_name.to_lowercase().contains(&needle)
+                    || folder.name.to_lowercase().contains(&needle)
+            })
+            .collect()
+    }
+
+    fn apply_folder_selection(&mut self) {
+        let matches = self.filtered_folders();
+        let Some(folder) = matches.get(self.folder_picker_selected).cloned() else {
+            self.status = "no folder matches the picker filter".to_string();
+            return;
+        };
+        let index = self
+            .folders
+            .iter()
+            .position(|candidate| candidate.name == folder.name)
+            .unwrap_or(self.selected_folder);
+        self.overlay = Overlay::None;
+        self.select_folder(index);
     }
 
     fn next_folder(&mut self) {
         if self.folders.is_empty() {
             return;
         }
-        self.folder_index = (self.folder_index + 1) % self.folders.len();
-        self.status = format!(
-            "selected folder {}",
-            self.folders[self.folder_index].display_name
-        );
+        let next = (self.selected_folder + 1) % self.folders.len();
+        self.select_folder(next);
     }
 
-    fn apply_search(&mut self) {
-        let query = self.search_input.to_ascii_lowercase();
-        self.filtered_messages = if query.is_empty() {
-            self.messages.clone()
+    /// Switch the active folder. The row held in the outgoing folder is
+    /// remembered and the incoming folder's row is restored. Live profiles
+    /// reload the message list through the same read-only listing used at
+    /// startup; fixture mailboxes keep their single message list.
+    fn select_folder(&mut self, index: usize) {
+        if self.folders.is_empty() {
+            return;
+        }
+        let index = index.min(self.folders.len() - 1);
+        let outgoing = self.folders[self.selected_folder].name.clone();
+        self.selection_memory.insert(outgoing, self.message_index);
+        self.selected_folder = index;
+        let folder_name = self.folders[index].name.clone();
+        let folder_label = self.folders[index].display_name.clone();
+        let restored = self
+            .selection_memory
+            .get(&folder_name)
+            .copied()
+            .unwrap_or(0);
+        self.message_index = restored;
+
+        match self.config.clone() {
+            Some(config) => {
+                self.messages_pending = true;
+                self.status = format!("loading messages for {folder_label}\u{2026}");
+                let result = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current()
+                        .block_on(async { load_folder_messages(config, folder_name).await })
+                });
+                self.messages_pending = false;
+                match result {
+                    Ok(messages) => {
+                        self.messages = messages;
+                        self.status =
+                            format!("folder {folder_label}: {} messages", self.messages.len());
+                    }
+                    Err(error) => {
+                        self.note_error(safe_error_summary(&format!(
+                            "folder load failed: {error:#}"
+                        )));
+                    }
+                }
+            }
+            None => {
+                self.status = format!(
+                    "selected folder {folder_label} (fixture mailbox keeps one message list)"
+                );
+            }
+        }
+    }
+
+    fn toggle_attachment_plan(&mut self) {
+        if self.attachment_plan_visible {
+            self.attachment_plan_visible = false;
+            self.status = "attachment plan hidden".to_string();
         } else {
-            self.messages
-                .iter()
-                .filter(|message| {
-                    message.from.to_ascii_lowercase().contains(&query)
-                        || message.subject.to_ascii_lowercase().contains(&query)
-                })
-                .cloned()
-                .collect()
-        };
-        self.message_index = self
-            .message_index
-            .min(self.filtered_messages.len().saturating_sub(1));
+            self.attachment_plan_visible = true;
+            self.status = "attachment plan is metadata-only; no auto-open".to_string();
+        }
     }
 
-    fn selected_message(&self) -> Option<&EmailEnvelope> {
-        self.filtered_messages.get(self.message_index)
+    fn move_selection(&mut self, delta: isize) {
+        let len = self.filtered_messages().len();
+        if len == 0 {
+            self.set_selected(0);
+            return;
+        }
+        let last = len as isize - 1;
+        let next = (self.message_index as isize + delta).clamp(0, last) as usize;
+        self.set_selected(next);
+    }
+
+    fn set_selected(&mut self, value: usize) {
+        let len = self.filtered_messages().len();
+        self.message_index = value.min(len.saturating_sub(1));
+    }
+
+    /// The live message list: the filter is applied on every access, so
+    /// typing, clearing, and folder reloads are reflected immediately.
+    fn filtered_messages(&self) -> Vec<EmailEnvelope> {
+        let query = self.filter.to_ascii_lowercase();
+        self.messages
+            .iter()
+            .filter(|message| {
+                query.is_empty()
+                    || message.from.to_ascii_lowercase().contains(&query)
+                    || message.subject.to_ascii_lowercase().contains(&query)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn selected_message(&self) -> Option<EmailEnvelope> {
+        self.filtered_messages().get(self.message_index).cloned()
     }
 
     fn selected_body(&self) -> Option<&EmailBody> {
         let uid = self.selected_message()?.uid;
         self.bodies.iter().find(|body| body.uid == uid)
+    }
+
+    /// Open the full-screen message viewer. When the selected body is not in
+    /// the local cache and a live profile is configured, fetch it through the
+    /// same read-only call used at startup; the viewer opens regardless so a
+    /// failed fetch never hijacks the flow.
+    fn open_message_viewer(&mut self) {
+        let Some(message) = self.selected_message() else {
+            self.status = "no message selected; j/k moves the list".to_string();
+            return;
+        };
+        if self.selected_body().is_none()
+            && let Some(config) = self.config.clone()
+        {
+            let uid = message.uid;
+            let folder = self
+                .folders
+                .get(self.selected_folder)
+                .map(|folder| folder.name.clone())
+                .unwrap_or_else(|| "INBOX".to_string());
+            self.body_pending = true;
+            self.status = format!("loading body for uid {uid}\u{2026}");
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(async { fetch_body_read_only(config, folder, uid).await })
+            });
+            self.body_pending = false;
+            match result {
+                Ok(body) => self.bodies.push(body),
+                Err(error) => {
+                    self.note_error(safe_error_summary(&format!("body fetch failed: {error:#}")));
+                }
+            }
+        }
+        self.viewer_scroll = 0;
+        self.overlay = Overlay::MessageViewer;
+        self.status = "message viewer is local and scrollable; Esc returns".to_string();
+    }
+
+    fn note_error(&mut self, message: String) {
+        // Background and request failures surface as a non-modal banner so a
+        // failing fetch or send never hijacks the browser.
+        self.error_banner = Some(message.clone());
+        self.status = message;
     }
 
     fn start_compose(&mut self) {
@@ -960,6 +1601,41 @@ impl EmailTuiApp {
         });
         self.mode = Mode::Compose;
         self.status = "reply draft started; original body is not quoted".to_string();
+    }
+
+    fn handle_compose_key(&mut self, key: KeyEvent) {
+        match self.mode {
+            Mode::SendConfirm => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => self.confirm_send(),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.mode = Mode::Compose;
+                    self.status = "send canceled; draft preserved".to_string();
+                }
+                _ => {}
+            },
+            Mode::DiscardConfirm => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.draft = None;
+                    self.mode = Mode::Browser;
+                    self.status = "draft discarded".to_string();
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.mode = Mode::Compose;
+                    self.status = "draft preserved".to_string();
+                }
+                _ => {}
+            },
+            Mode::Compose => match key.code {
+                KeyCode::Tab => self.next_draft_field(),
+                KeyCode::Backspace => self.pop_draft_char(),
+                KeyCode::Enter => self.enter_draft_newline_or_next_field(),
+                KeyCode::F(5) => self.review_send(),
+                KeyCode::Esc => self.request_discard_or_close(),
+                KeyCode::Char(c) if !c.is_control() => self.push_draft_char(c),
+                _ => {}
+            },
+            _ => {}
+        }
     }
 
     fn next_draft_field(&mut self) {
@@ -1042,19 +1718,19 @@ impl EmailTuiApp {
             self.status = "non-empty draft requires discard confirmation".to_string();
         } else {
             self.draft = None;
-            self.mode = Mode::Mailbox;
+            self.mode = Mode::Browser;
             self.status = "compose closed".to_string();
         }
     }
 
     fn confirm_send(&mut self) {
         let Some(draft) = self.draft.clone() else {
-            self.mode = Mode::Mailbox;
+            self.mode = Mode::Browser;
             return;
         };
         if !self.send_enabled {
             self.draft = None;
-            self.mode = Mode::Mailbox;
+            self.mode = Mode::Browser;
             self.status = format!(
                 "fixture send confirmed for {} recipient(s); no SMTP target opened",
                 recipient_count(&draft.to, &draft.cc)
@@ -1087,15 +1763,45 @@ impl EmailTuiApp {
         match result {
             Ok(()) => {
                 self.draft = None;
-                self.mode = Mode::Mailbox;
+                self.mode = Mode::Browser;
                 self.status = "email sent; draft cleared".to_string();
             }
-            Err(error) => {
-                self.mode = Mode::Compose;
-                self.status = classify_provider_error(&error.to_string());
-            }
+            Err(error) => self.record_send_failure(error.to_string()),
         }
     }
+
+    /// A failed send keeps the draft and returns to the compose surface; the
+    /// redacted classification also raises the non-modal error banner.
+    fn record_send_failure(&mut self, error: String) {
+        let classified = classify_provider_error(&error);
+        self.mode = Mode::Compose;
+        self.note_error(classified);
+    }
+}
+
+async fn load_folder_messages(config: EmailConfig, folder: String) -> Result<Vec<EmailEnvelope>> {
+    let mut service = EmailService::new_direct().context("create EmailService")?;
+    service
+        .connect_direct(config)
+        .await
+        .context("connect to email target")?;
+    let (messages, _) = service
+        .list_messages_direct(folder, 0, PAGE_SIZE)
+        .await
+        .context("list email messages")?;
+    Ok(messages)
+}
+
+async fn fetch_body_read_only(config: EmailConfig, folder: String, uid: u32) -> Result<EmailBody> {
+    let mut service = EmailService::new_direct().context("create EmailService")?;
+    service
+        .connect_direct(config)
+        .await
+        .context("connect to email target")?;
+    service
+        .fetch_body_read_only_direct(folder, uid)
+        .await
+        .context("fetch message body")
 }
 
 fn truncate(value: &str, width: usize) -> String {
@@ -1108,6 +1814,44 @@ fn truncate(value: &str, width: usize) -> String {
         .collect::<String>();
     result.push_str("...");
     result
+}
+
+fn safe_inline(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_string();
+    }
+    let mut result: String = value.chars().take(width.saturating_sub(1)).collect();
+    result.push('\u{2026}');
+    result
+}
+
+fn safe_error_summary(message: &str) -> String {
+    let mut summary = message.replace('\n', " ");
+    if summary.chars().count() > 180 {
+        summary = summary.chars().take(177).collect();
+        summary.push_str("...");
+    }
+    summary
+}
+
+fn mode_label(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Browser => "browser",
+        Mode::Filter => "filter",
+        Mode::Compose => "compose",
+        Mode::SendConfirm => "send_confirm",
+        Mode::DiscardConfirm => "discard_confirm",
+    }
+}
+
+fn window_start(selected: usize, visible: usize, len: usize) -> usize {
+    if visible == 0 || len <= visible {
+        0
+    } else if selected >= visible {
+        (selected + 1).saturating_sub(visible)
+    } else {
+        0
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -1187,9 +1931,13 @@ fn classify_provider_error(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::KeyModifiers;
     use serde_json::json;
 
-    use super::{EmailTuiLaunch, EmailTuiSource, build_email_tui_evidence};
+    use super::{
+        EmailTuiLaunch, EmailTuiSource, Overlay, build_email_tui_evidence, classify_provider_error,
+    };
+    use crate::tui::EmailTuiApp;
 
     fn fixture_launch() -> EmailTuiLaunch {
         EmailTuiLaunch {
@@ -1200,6 +1948,22 @@ mod tests {
                 "{}/fixtures/email_tui_smoke.json",
                 env!("CARGO_MANIFEST_DIR")
             )),
+        }
+    }
+
+    fn fixture_app() -> EmailTuiApp {
+        let launch = fixture_launch();
+        let data = super::load_fixture(launch.fixture_path.as_deref().unwrap()).unwrap();
+        EmailTuiApp::new(launch.profile_label, None, false, data)
+    }
+
+    fn press(app: &mut EmailTuiApp, code: crossterm::event::KeyCode) {
+        app.handle_key(crossterm::event::KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn type_text(app: &mut EmailTuiApp, text: &str) {
+        for ch in text.chars() {
+            press(app, crossterm::event::KeyCode::Char(ch));
         }
     }
 
@@ -1216,12 +1980,260 @@ mod tests {
             evidence["quality_gate"]["accessibility"]["keyboard_only"],
             json!(true)
         );
-        assert!(
-            evidence["coverage"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|item| item == "message_body_redaction")
+        let coverage = evidence["coverage"].as_array().unwrap().clone();
+        for marker in [
+            "message_body_redaction",
+            "folder_picker",
+            "message_viewer_scrollback",
+            "live_filter_match_count",
+            "non_modal_error_banner",
+            "confirm_quit",
+            "per_folder_selection_memory",
+        ] {
+            assert!(
+                coverage.contains(&json!(marker)),
+                "coverage must include {marker}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_filter_updates_match_count_and_clears() {
+        let mut app = fixture_app();
+        press(&mut app, crossterm::event::KeyCode::Char('/'));
+        assert_eq!(app.mode, super::Mode::Filter);
+        type_text(&mut app, "tls");
+        // Typing narrows live with the cursor pinned to the first match.
+        assert_eq!(app.message_index, 0);
+        assert_eq!(app.filtered_messages().len(), 1);
+        press(&mut app, crossterm::event::KeyCode::Enter);
+        assert_eq!(app.mode, super::Mode::Browser);
+        assert!(app.status.contains("filter applied: tls"));
+        assert!(app.status.contains("(1 matches)"));
+
+        press(&mut app, crossterm::event::KeyCode::Char('/'));
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert_eq!(app.mode, super::Mode::Browser);
+        assert!(app.filter.is_empty());
+        assert_eq!(app.filtered_messages().len(), 2);
+        assert!(app.status.contains("filter cleared"));
+    }
+
+    #[test]
+    fn folder_picker_narrows_and_switches() {
+        let mut app = fixture_app();
+        press(&mut app, crossterm::event::KeyCode::Char('F'));
+        assert_eq!(app.overlay, Overlay::FolderPicker);
+        type_text(&mut app, "arch");
+        press(&mut app, crossterm::event::KeyCode::Enter);
+        assert_eq!(app.overlay, Overlay::None);
+        assert_eq!(app.selected_folder, 1);
+        assert!(app.status.contains("selected folder Archive"));
+
+        // A filter with no matches keeps the picker open and stays put.
+        press(&mut app, crossterm::event::KeyCode::Char('F'));
+        type_text(&mut app, "no-such-folder");
+        press(&mut app, crossterm::event::KeyCode::Enter);
+        assert!(app.status.contains("no folder matches the picker filter"));
+        assert_eq!(app.overlay, Overlay::FolderPicker);
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn folder_switch_restores_per_folder_selection() {
+        let mut app = fixture_app();
+        press(&mut app, crossterm::event::KeyCode::Down);
+        assert_eq!(app.message_index, 1);
+        press(&mut app, crossterm::event::KeyCode::Char('f'));
+        assert_eq!(app.selected_folder, 1);
+        // The INBOX row is restored when the operator returns to it.
+        press(&mut app, crossterm::event::KeyCode::Char('f'));
+        assert_eq!(app.selected_folder, 0);
+        assert_eq!(
+            app.message_index, 1,
+            "selection must be restored per folder"
         );
+    }
+
+    #[test]
+    fn message_viewer_scrolls_full_body_and_closes() {
+        let mut app = fixture_app();
+        let long_body = (1..=60)
+            .map(|index| format!("body line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.bodies.push(crate::types::EmailBody {
+            uid: 1002,
+            uid_validity: None,
+            modseq: None,
+            from: "alerts@example.test".to_string(),
+            to: vec!["operator@example.test".to_string()],
+            cc: Vec::new(),
+            subject: "TLS certificate rotation".to_string(),
+            date: "2026-07-07T08:05:00Z".to_string(),
+            text: long_body,
+            html: None,
+            attachments: Vec::new(),
+        });
+        press(&mut app, crossterm::event::KeyCode::Down);
+        press(&mut app, crossterm::event::KeyCode::Enter);
+        assert_eq!(app.overlay, Overlay::MessageViewer);
+        assert_eq!(app.viewer_scroll, 0);
+
+        let max_scroll = super::EmailTuiApp::message_viewer_lines(&app).len() - 1;
+        press(&mut app, crossterm::event::KeyCode::PageDown);
+        assert_eq!(app.viewer_scroll, 10);
+        press(&mut app, crossterm::event::KeyCode::End);
+        assert_eq!(app.viewer_scroll, max_scroll);
+        press(&mut app, crossterm::event::KeyCode::PageDown);
+        assert_eq!(
+            app.viewer_scroll, max_scroll,
+            "scrolling must clamp at the last body line"
+        );
+        press(&mut app, crossterm::event::KeyCode::Home);
+        assert_eq!(app.viewer_scroll, 0);
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn quit_with_in_flight_fetch_requires_confirmation() {
+        let mut app = fixture_app();
+        // Compose owns `q` as draft text; quitting from there goes through the
+        // discard confirmation, so a draft can never be lost by a stray `q`.
+        press(&mut app, crossterm::event::KeyCode::Char('c'));
+        type_text(&mut app, "hello");
+        press(&mut app, crossterm::event::KeyCode::Char('q'));
+        assert!(app.draft.is_some(), "compose mode types q into the draft");
+        assert!(!app.should_quit);
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert_eq!(app.mode, super::Mode::DiscardConfirm);
+        press(&mut app, crossterm::event::KeyCode::Char('n'));
+        assert!(app.draft.is_some(), "n keeps the draft");
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        press(&mut app, crossterm::event::KeyCode::Char('y'));
+        assert!(app.draft.is_none(), "y discards the draft");
+        assert_eq!(app.mode, super::Mode::Browser);
+
+        // With a body fetch in flight, `q` stages the confirmation instead of
+        // quitting; staying keeps the marker, and only `y` leaves the app.
+        app.body_pending = true;
+        press(&mut app, crossterm::event::KeyCode::Char('q'));
+        assert_eq!(app.overlay, Overlay::ConfirmQuit);
+        assert!(!app.should_quit);
+        press(&mut app, crossterm::event::KeyCode::Esc);
+        assert_eq!(app.overlay, Overlay::None);
+        assert!(!app.should_quit);
+        assert!(app.body_pending, "staying keeps the fetch marker");
+        press(&mut app, crossterm::event::KeyCode::Char('q'));
+        press(&mut app, crossterm::event::KeyCode::Char('y'));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn background_error_becomes_banner_not_modal() {
+        let mut app = fixture_app();
+        app.note_error("folder load failed: connection refused".to_string());
+        assert_eq!(
+            app.mode,
+            super::Mode::Browser,
+            "errors must not hijack the mode"
+        );
+        assert!(app.error_banner.is_some());
+        assert!(app.status.contains("connection refused"));
+        // Any key acknowledges the banner while keeping its normal meaning.
+        press(&mut app, crossterm::event::KeyCode::Char('j'));
+        assert!(app.error_banner.is_none());
+        assert_eq!(app.message_index, 1);
+        assert_eq!(app.mode, super::Mode::Browser);
+    }
+
+    #[test]
+    fn send_failure_keeps_draft_and_raises_banner() {
+        let mut app = fixture_app();
+        press(&mut app, crossterm::event::KeyCode::Char('c'));
+        app.record_send_failure("535 authentication failed".to_string());
+        assert_eq!(
+            app.mode,
+            super::Mode::Compose,
+            "the draft must be preserved"
+        );
+        assert!(app.draft.is_some());
+        assert!(app.error_banner.is_some());
+        assert!(app.status.contains(
+            "send failed: auth error; check credentials or provider app-password policy"
+        ));
+        assert_eq!(
+            classify_provider_error("connection refused by peer"),
+            "send failed: transport error; check host, port, network, and timeout"
+        );
+    }
+
+    #[test]
+    fn page_and_home_end_keys_move_selection() {
+        let mut app = fixture_app();
+        press(&mut app, crossterm::event::KeyCode::PageDown);
+        assert_eq!(app.message_index, 1, "fixture holds two messages");
+        press(&mut app, crossterm::event::KeyCode::PageUp);
+        assert_eq!(app.message_index, 0);
+        press(&mut app, crossterm::event::KeyCode::End);
+        assert_eq!(app.message_index, 1);
+        press(&mut app, crossterm::event::KeyCode::Home);
+        assert_eq!(app.message_index, 0);
+    }
+
+    #[test]
+    fn help_overlay_opens_and_closes() {
+        let mut app = fixture_app();
+        press(&mut app, crossterm::event::KeyCode::Char('?'));
+        assert_eq!(app.overlay, Overlay::Help);
+        // Any key closes the help overlay without applying that key's meaning.
+        press(&mut app, crossterm::event::KeyCode::Char('c'));
+        assert_eq!(app.overlay, Overlay::None);
+        assert!(
+            app.draft.is_none(),
+            "help must not leak keystrokes into the app"
+        );
+    }
+
+    #[test]
+    fn hint_footer_variants_fit_120_columns() {
+        let mut app = fixture_app();
+        assert!(app.hint_footer().chars().count() <= 122);
+
+        app.mode = super::Mode::Filter;
+        app.filter = "x".repeat(64);
+        assert!(app.hint_footer().chars().count() <= 122);
+
+        app.filter.clear();
+        for overlay in [
+            Overlay::Help,
+            Overlay::Diagnostics,
+            Overlay::MessageViewer,
+            Overlay::FolderPicker,
+            Overlay::ConfirmQuit,
+        ] {
+            app.overlay = overlay;
+            assert!(
+                app.hint_footer().chars().count() <= 122,
+                "hint for {overlay:?} must fit ~120 columns"
+            );
+        }
+
+        app.overlay = Overlay::None;
+        for mode in [
+            super::Mode::Browser,
+            super::Mode::Filter,
+            super::Mode::Compose,
+            super::Mode::SendConfirm,
+            super::Mode::DiscardConfirm,
+        ] {
+            app.mode = mode;
+            assert!(
+                app.hint_footer().chars().count() <= 122,
+                "hint for {mode:?} must fit ~120 columns"
+            );
+        }
     }
 }
