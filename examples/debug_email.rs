@@ -2,7 +2,7 @@
 //! Reads IMAP credentials from voidb encrypted config automatically.
 //! Usage: cargo run --package voidb-plugin-email --example debug_email -- <subject_keyword>
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::io::{Cursor, Read, Write};
 use voidb_core::config::AppConfig;
 
@@ -15,24 +15,32 @@ fn main() -> Result<()> {
     let keyword = &args[1];
 
     // Load credentials from voidb encrypted config
-    let config = AppConfig::load_with_password(None)
-        .map_err(|e| anyhow!("Failed to load config: {}", e))?;
+    let config =
+        AppConfig::load_with_password(None).map_err(|e| anyhow!("Failed to load config: {}", e))?;
 
-    let conn = config.connections.iter()
+    let conn = config
+        .connections
+        .iter()
         .find(|c| c.plugin_id.as_deref() == Some("email"))
         .ok_or_else(|| anyhow!("No email connection found in config"))?;
 
-    let plugin_config = conn.plugin_config.as_ref()
+    let plugin_config = conn
+        .plugin_config
+        .as_ref()
         .ok_or_else(|| anyhow!("No plugin_config in email connection"))?;
 
     let email_config: serde_json::Value = plugin_config.clone();
-    let host = email_config["receive"]["host"].as_str()
+    let host = email_config["receive"]["host"]
+        .as_str()
         .ok_or_else(|| anyhow!("No receive.host in config"))?;
-    let port = email_config["receive"]["port"].as_u64()
+    let port = email_config["receive"]["port"]
+        .as_u64()
         .ok_or_else(|| anyhow!("No receive.port in config"))? as u16;
-    let user = email_config["email"].as_str()
+    let user = email_config["email"]
+        .as_str()
         .ok_or_else(|| anyhow!("No email in config"))?;
-    let pass = email_config["password"].as_str()
+    let pass = email_config["password"]
+        .as_str()
         .ok_or_else(|| anyhow!("No password in config"))?;
 
     println!("Connecting to {}:{} as {}...", host, port, user);
@@ -54,7 +62,8 @@ fn main() -> Result<()> {
     };
     let mut client = imap::Client::new(wrapped);
     client.read_greeting()?;
-    let mut session = client.login(user, pass)
+    let mut session = client
+        .login(user, pass)
         .map_err(|e| anyhow!("Login failed: {}", e.0))?;
 
     session.select("INBOX")?;
@@ -75,7 +84,10 @@ fn main() -> Result<()> {
     println!("Fetching UID {}...\n", uid);
 
     let fetches = session.uid_fetch(uid.to_string(), "BODY[]")?;
-    let fetch = fetches.iter().next().ok_or_else(|| anyhow!("No fetch result"))?;
+    let fetch = fetches
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow!("No fetch result"))?;
     let body_raw = fetch.body().ok_or_else(|| anyhow!("No body"))?;
 
     println!("=== RAW SIZE: {} bytes ===\n", body_raw.len());
@@ -98,7 +110,10 @@ fn main() -> Result<()> {
         println!("{}", text);
     }
 
-    println!("\n=== HTML ({} chars) ===", html.as_ref().map(|h| h.len()).unwrap_or(0));
+    println!(
+        "\n=== HTML ({} chars) ===",
+        html.as_ref().map(|h| h.len()).unwrap_or(0)
+    );
     if let Some(ref h) = html {
         // Show first 2000 chars of HTML
         if h.len() > 2000 {
@@ -121,11 +136,18 @@ fn main() -> Result<()> {
         let mut idx = 0;
         while let Some(start) = lower[pos..].find("<img") {
             let abs_start = pos + start;
-            let tag_end = h[abs_start..].find('>').map(|i| abs_start + i + 1).unwrap_or(h.len());
+            let tag_end = h[abs_start..]
+                .find('>')
+                .map(|i| abs_start + i + 1)
+                .unwrap_or(h.len());
             let tag = &h[abs_start..tag_end];
             idx += 1;
             let src = extract_attr(tag, "src").unwrap_or_else(|| "(no src)".into());
-            let src_short = if src.len() > 120 { format!("{}...", &src[..120]) } else { src };
+            let src_short = if src.len() > 120 {
+                format!("{}...", &src[..120])
+            } else {
+                src
+            };
             println!("  img#{}: src={}", idx, src_short);
             pos = tag_end;
         }
@@ -143,17 +165,29 @@ fn main() -> Result<()> {
         let mut link_idx = 0;
         while let Some(found) = processed[search_pos..].find("<a href=") {
             let abs = search_pos + found;
-            let snippet_end = processed[abs..].find("</a>").map(|i| abs + i + 4).unwrap_or((abs + 200).min(processed.len()));
+            let snippet_end = processed[abs..]
+                .find("</a>")
+                .map(|i| abs + i + 4)
+                .unwrap_or((abs + 200).min(processed.len()));
             link_idx += 1;
-            println!("  injected_link#{}: {}", link_idx, &processed[abs..snippet_end]);
+            println!(
+                "  injected_link#{}: {}",
+                link_idx,
+                &processed[abs..snippet_end]
+            );
             search_pos = snippet_end;
-            if link_idx >= 20 { break; }
+            if link_idx >= 20 {
+                break;
+            }
         }
 
         // Plaintext preview without pulling UI-only conversion dependencies into
         // the service crate.
         let text_out = html_preview_text(&processed, 120);
-        println!("\n=== HTML TEXT PREVIEW ({} chars, width=120) ===", text_out.len());
+        println!(
+            "\n=== HTML TEXT PREVIEW ({} chars, width=120) ===",
+            text_out.len()
+        );
 
         // Show the full output but limit to 5000 chars
         if text_out.len() > 5000 {
@@ -165,8 +199,12 @@ fn main() -> Result<()> {
         // Count blank lines
         let blank_lines = text_out.lines().filter(|l| l.trim().is_empty()).count();
         let total_lines = text_out.lines().count();
-        println!("\n=== STATS: {} total lines, {} blank lines ({:.0}% blank) ===",
-            total_lines, blank_lines, blank_lines as f64 / total_lines.max(1) as f64 * 100.0);
+        println!(
+            "\n=== STATS: {} total lines, {} blank lines ({:.0}% blank) ===",
+            total_lines,
+            blank_lines,
+            blank_lines as f64 / total_lines.max(1) as f64 * 100.0
+        );
 
         // Check for extremely long lines (could cause ratatui rendering issues)
         let max_line_len = text_out.lines().map(|l| l.len()).max().unwrap_or(0);
@@ -175,7 +213,10 @@ fn main() -> Result<()> {
         println!("  Lines over 200 chars: {}", lines_over_200);
 
         // Check for unusual characters that might break terminal rendering
-        let control_chars = text_out.chars().filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t').count();
+        let control_chars = text_out
+            .chars()
+            .filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t')
+            .count();
         println!("  Control characters (non-newline/tab): {}", control_chars);
 
         // Also test with raw HTML (no img_to_link) to compare
@@ -184,8 +225,13 @@ fn main() -> Result<()> {
         let raw_lines = raw_out.lines().count();
         let raw_blank = raw_out.lines().filter(|l| l.trim().is_empty()).count();
         let raw_max_line = raw_out.lines().map(|l| l.len()).max().unwrap_or(0);
-        println!("  {} total lines, {} blank ({:.0}%), max line {} chars",
-            raw_lines, raw_blank, raw_blank as f64 / raw_lines.max(1) as f64 * 100.0, raw_max_line);
+        println!(
+            "  {} total lines, {} blank ({:.0}%), max line {} chars",
+            raw_lines,
+            raw_blank,
+            raw_blank as f64 / raw_lines.max(1) as f64 * 100.0,
+            raw_max_line
+        );
         if raw_out.len() > 5000 {
             println!("{}...(truncated)", &raw_out[..5000]);
         } else {
@@ -201,18 +247,24 @@ fn dump_mime(parsed: &mailparse::ParsedMail, depth: usize) {
     let indent = "  ".repeat(depth);
     let mime = &parsed.ctype.mimetype;
     let disposition = parsed.get_content_disposition();
-    let filename = disposition.params.get("filename")
+    let filename = disposition
+        .params
+        .get("filename")
         .or_else(|| parsed.ctype.params.get("name"))
         .map(|s| s.as_str())
         .unwrap_or("");
-    let cid = parsed.headers.iter()
+    let cid = parsed
+        .headers
+        .iter()
         .find(|h| h.get_key_ref().eq_ignore_ascii_case("Content-ID"))
         .map(|h| h.get_value())
         .unwrap_or_default();
 
     let body_len = parsed.get_body_raw().map(|b| b.len()).unwrap_or(0);
-    println!("{}[{}] disp={:?} filename='{}' cid='{}' body={}B",
-        indent, mime, disposition.disposition, filename, cid, body_len);
+    println!(
+        "{}[{}] disp={:?} filename='{}' cid='{}' body={}B",
+        indent, mime, disposition.disposition, filename, cid, body_len
+    );
 
     for sub in &parsed.subparts {
         dump_mime(sub, depth + 1);
@@ -225,13 +277,21 @@ fn extract_body_parts(parsed: &mailparse::ParsedMail) -> (String, Option<String>
     if parsed.subparts.is_empty() {
         let ct = parsed.ctype.mimetype.to_lowercase();
         if let Ok(body) = parsed.get_body() {
-            if ct.contains("html") { html = Some(body); } else { text = body; }
+            if ct.contains("html") {
+                html = Some(body);
+            } else {
+                text = body;
+            }
         }
     } else {
         for part in &parsed.subparts {
             let (t, h) = extract_body_parts(part);
-            if !t.is_empty() && text.is_empty() { text = t; }
-            if h.is_some() && html.is_none() { html = h; }
+            if !t.is_empty() && text.is_empty() {
+                text = t;
+            }
+            if h.is_some() && html.is_none() {
+                html = h;
+            }
         }
     }
     (text, html)
@@ -281,7 +341,8 @@ fn img_to_link(html: &str) -> String {
                     break;
                 }
             } else if lower.starts_with("<img") {
-                let end = remaining.find('>')
+                let end = remaining
+                    .find('>')
                     .map(|i| i + 1)
                     .unwrap_or(remaining.len());
                 let tag = &remaining[..end];
@@ -387,14 +448,20 @@ struct GreetingPrefixStream<S> {
 impl<S: Read> Read for GreetingPrefixStream<S> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let remaining = self.prefix.get_ref().len() as u64 - self.prefix.position();
-        if remaining > 0 { return self.prefix.read(buf); }
+        if remaining > 0 {
+            return self.prefix.read(buf);
+        }
         self.inner.read(buf)
     }
 }
 
 impl<S: Write> Write for GreetingPrefixStream<S> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> { self.inner.write(buf) }
-    fn flush(&mut self) -> std::io::Result<()> { self.inner.flush() }
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn raw_id_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
@@ -402,9 +469,13 @@ fn raw_id_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
     let mut line = Vec::new();
     loop {
         let n = stream.read(&mut buf)?;
-        if n == 0 { return Err(anyhow!("Connection closed")); }
+        if n == 0 {
+            return Err(anyhow!("Connection closed"));
+        }
         line.push(buf[0]);
-        if buf[0] == b'\n' { break; }
+        if buf[0] == b'\n' {
+            break;
+        }
     }
     let cmd = b"X0 ID (\"name\" \"voidb\" \"version\" \"1.0\")\r\n";
     stream.write_all(cmd)?;
@@ -413,11 +484,17 @@ fn raw_id_handshake<S: Read + Write>(stream: &mut S) -> Result<()> {
         line.clear();
         loop {
             let n = stream.read(&mut buf)?;
-            if n == 0 { return Err(anyhow!("Connection closed")); }
+            if n == 0 {
+                return Err(anyhow!("Connection closed"));
+            }
             line.push(buf[0]);
-            if buf[0] == b'\n' { break; }
+            if buf[0] == b'\n' {
+                break;
+            }
         }
-        if String::from_utf8_lossy(&line).starts_with("X0 ") { break; }
+        if String::from_utf8_lossy(&line).starts_with("X0 ") {
+            break;
+        }
     }
     Ok(())
 }

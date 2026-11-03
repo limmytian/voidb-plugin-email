@@ -6,9 +6,14 @@ use std::net::TcpStream;
 
 fn main() -> anyhow::Result<()> {
     let config = voidb_core::config::AppConfig::load()?;
-    let conn = config.connections.iter().find(|c| c.name == "126").expect("No '126' connection");
+    let conn = config
+        .connections
+        .iter()
+        .find(|c| c.name == "126")
+        .expect("No '126' connection");
     let email_config: voidb_plugin_email::EmailConfig = conn
-        .plugin_config.as_ref()
+        .plugin_config
+        .as_ref()
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .expect("Failed to parse email config");
 
@@ -30,9 +35,13 @@ fn main() -> anyhow::Result<()> {
         let mut buf = Vec::new();
         loop {
             let mut byte = [0u8; 1];
-            if s.read(&mut byte).unwrap_or(0) == 0 { break; }
+            if s.read(&mut byte).unwrap_or(0) == 0 {
+                break;
+            }
             buf.push(byte[0]);
-            if byte[0] == b'\n' { break; }
+            if byte[0] == b'\n' {
+                break;
+            }
         }
         String::from_utf8_lossy(&buf).trim().to_string()
     };
@@ -44,14 +53,20 @@ fn main() -> anyhow::Result<()> {
             let mut buf = Vec::new();
             loop {
                 let mut byte = [0u8; 1];
-                if s.read(&mut byte).unwrap_or(0) == 0 { break; }
+                if s.read(&mut byte).unwrap_or(0) == 0 {
+                    break;
+                }
                 buf.push(byte[0]);
-                if byte[0] == b'\n' { break; }
+                if byte[0] == b'\n' {
+                    break;
+                }
             }
             let line = String::from_utf8_lossy(&buf).trim().to_string();
             let done = line.starts_with(tag);
             lines.push(line);
-            if done { break; }
+            if done {
+                break;
+            }
         }
         lines
     };
@@ -91,7 +106,11 @@ fn main() -> anyhow::Result<()> {
     for line in read_until_tag(&mut stream, "A3 ") {
         if line.starts_with("* SEARCH") {
             let count = line.split_whitespace().count() - 2; // "* SEARCH" + seq nums
-            println!("S: {} ({} results)", line.chars().take(80).collect::<String>(), count);
+            println!(
+                "S: {} ({} results)",
+                line.chars().take(80).collect::<String>(),
+                count
+            );
         } else {
             println!("S: {}", line);
         }

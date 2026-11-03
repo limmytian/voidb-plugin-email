@@ -24,10 +24,22 @@ fn main() -> anyhow::Result<()> {
     println!("=== Email Connection Config ===");
     println!("  Email:            {}", email_config.email);
     println!("  Protocol:         {}", email_config.protocol.as_str());
-    println!("  Receive Server:   {}:{}", email_config.receive.host, email_config.receive.port);
-    println!("  Receive Security: {}", email_config.receive_security.as_str());
-    println!("  SMTP Server:      {}:{}", email_config.smtp.host, email_config.smtp.port);
-    println!("  SMTP Security:    {}", email_config.smtp_security.as_str());
+    println!(
+        "  Receive Server:   {}:{}",
+        email_config.receive.host, email_config.receive.port
+    );
+    println!(
+        "  Receive Security: {}",
+        email_config.receive_security.as_str()
+    );
+    println!(
+        "  SMTP Server:      {}:{}",
+        email_config.smtp.host, email_config.smtp.port
+    );
+    println!(
+        "  SMTP Security:    {}",
+        email_config.smtp_security.as_str()
+    );
     println!();
 
     // --- Test 1: IMAP connection & list folders ---
@@ -56,7 +68,9 @@ fn main() -> anyhow::Result<()> {
 
                     // --- Test 2: List messages in INBOX with pagination ---
                     println!("=== Test 2: List Messages in INBOX (paginated) ===");
-                    let inbox = folders.iter().find(|f| f.name.eq_ignore_ascii_case("INBOX"));
+                    let inbox = folders
+                        .iter()
+                        .find(|f| f.name.eq_ignore_ascii_case("INBOX"));
                     if inbox.is_some() {
                         client.logout();
                         let mut client2 = voidb_plugin_email::imap_client_connect(
@@ -77,7 +91,11 @@ fn main() -> anyhow::Result<()> {
                                 let mut seen_count = 0;
                                 let mut unseen_count = 0;
                                 for msg in &msgs {
-                                    if msg.seen { seen_count += 1; } else { unseen_count += 1; }
+                                    if msg.seen {
+                                        seen_count += 1;
+                                    } else {
+                                        unseen_count += 1;
+                                    }
                                 }
                                 println!("  Page 1 seen/unseen: {}/{}", seen_count, unseen_count);
                                 println!();
@@ -122,7 +140,10 @@ fn main() -> anyhow::Result<()> {
                                     // --- Test 3: Fetch body ---
                                     if let Some(first) = msgs.first() {
                                         println!();
-                                        println!("=== Test 3: Fetch Message Body (seq={}) ===", first.uid);
+                                        println!(
+                                            "=== Test 3: Fetch Message Body (seq={}) ===",
+                                            first.uid
+                                        );
                                         client2.logout();
                                         let mut client3 = voidb_plugin_email::imap_client_connect(
                                             &email_config.receive.host,
@@ -138,9 +159,16 @@ fn main() -> anyhow::Result<()> {
                                                 println!("       To:      {}", body.to.join(", "));
                                                 println!("       Subject: {}", body.subject);
                                                 println!("       Date:    {}", body.date);
-                                                let preview: String = body.text.chars().take(200).collect();
-                                                println!("       Body:    {}...", preview.replace('\n', " "));
-                                                println!("       Has HTML: {}", body.html.is_some());
+                                                let preview: String =
+                                                    body.text.chars().take(200).collect();
+                                                println!(
+                                                    "       Body:    {}...",
+                                                    preview.replace('\n', " ")
+                                                );
+                                                println!(
+                                                    "       Has HTML: {}",
+                                                    body.html.is_some()
+                                                );
                                             }
                                             Err(e) => println!("  [FAIL] Fetch body: {}", e),
                                         }
