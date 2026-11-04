@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -401,24 +404,51 @@ fn security_label(security: SecurityType) -> &'static str {
     }
 }
 
+/// Run an async provider call on a background thread with its own runtime
+/// and report the result through a channel. The plugin-owned TUI launch
+/// contract forbids blocking the input loop on network calls, so key handlers
+/// only stage the work here and the run loop drains the result non-blocking.
+fn spawn_background<T, F>(work: F) -> mpsc::Receiver<Result<T>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Pin<Box<dyn Future<Output = Result<T>> + Send>> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| anyhow::anyhow!("start runtime: {error}"))
+            .and_then(|runtime| runtime.block_on(work()));
+        let _ = tx.send(result);
+    });
+    rx
+}
+
 fn run_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut EmailTuiApp) -> Result<()> {
     terminal.draw(|frame| app.draw(frame))?;
     loop {
         if app.should_quit {
             return Ok(());
         }
-        if event::poll(Duration::from_millis(100))? {
+        let background_changed = app.drain_background();
+        let event_handled = if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
                     app.handle_key(key);
-                    terminal.draw(|frame| app.draw(frame))?;
+                    true
                 }
                 Event::Resize(cols, rows) => {
                     app.status = format!("resized email view to {cols}x{rows}");
-                    terminal.draw(|frame| app.draw(frame))?;
+                    true
                 }
-                _ => {}
+                _ => false,
             }
+        } else {
+            false
+        };
+        if event_handled || background_changed {
+            terminal.draw(|frame| app.draw(frame))?;
         }
     }
 }
@@ -446,6 +476,11 @@ struct EmailTuiApp {
     viewer_scroll: usize,
     attachment_plan_visible: bool,
     /// Set while a folder listing is in flight; renders a loading marker.
+    /// Background workers for provider calls; results drain non-blocking in
+    /// the run loop so the input loop never blocks on network I/O.
+    folder_rx: Option<mpsc::Receiver<Result<Vec<EmailEnvelope>>>>,
+    body_rx: Option<mpsc::Receiver<Result<EmailBody>>>,
+    send_rx: Option<mpsc::Receiver<Result<()>>>,
     messages_pending: bool,
     /// Set while a message body fetch is in flight; renders a loading marker.
     body_pending: bool,
@@ -481,6 +516,9 @@ impl EmailTuiApp {
             folder_picker_selected: 0,
             viewer_scroll: 0,
             attachment_plan_visible: false,
+            folder_rx: None,
+            body_rx: None,
+            send_rx: None,
             messages_pending: false,
             body_pending: false,
             error_banner: None,
@@ -1446,23 +1484,9 @@ impl EmailTuiApp {
             Some(config) => {
                 self.messages_pending = true;
                 self.status = format!("loading messages for {folder_label}\u{2026}");
-                let result = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current()
-                        .block_on(async { load_folder_messages(config, folder_name).await })
-                });
-                self.messages_pending = false;
-                match result {
-                    Ok(messages) => {
-                        self.messages = messages;
-                        self.status =
-                            format!("folder {folder_label}: {} messages", self.messages.len());
-                    }
-                    Err(error) => {
-                        self.note_error(safe_error_summary(&format!(
-                            "folder load failed: {error:#}"
-                        )));
-                    }
-                }
+                self.folder_rx = Some(spawn_background(move || {
+                    Box::pin(async move { load_folder_messages(config, folder_name).await })
+                }));
             }
             None => {
                 self.status = format!(
@@ -1542,17 +1566,9 @@ impl EmailTuiApp {
                 .unwrap_or_else(|| "INBOX".to_string());
             self.body_pending = true;
             self.status = format!("loading body for uid {uid}\u{2026}");
-            let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(async { fetch_body_read_only(config, folder, uid).await })
-            });
-            self.body_pending = false;
-            match result {
-                Ok(body) => self.bodies.push(body),
-                Err(error) => {
-                    self.note_error(safe_error_summary(&format!("body fetch failed: {error:#}")));
-                }
-            }
+            self.body_rx = Some(spawn_background(move || {
+                Box::pin(async move { fetch_body_read_only(config, folder, uid).await })
+            }));
         }
         self.viewer_scroll = 0;
         self.overlay = Overlay::MessageViewer;
@@ -1738,9 +1754,15 @@ impl EmailTuiApp {
             return;
         }
 
+        if self.send_rx.is_some() {
+            self.status = "a send is already in progress".to_string();
+            return;
+        }
+
         let config = self.config.clone().expect("checked above");
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
+        self.status = "sending email\u{2026}".to_string();
+        self.send_rx = Some(spawn_background(move || {
+            Box::pin(async move {
                 let mut service = EmailService::new_direct().context("create EmailService")?;
                 service
                     .send_email_direct(
@@ -1758,16 +1780,92 @@ impl EmailTuiApp {
                     .await
                     .context("send email")
             })
-        });
+        }));
+    }
 
-        match result {
-            Ok(()) => {
-                self.draft = None;
-                self.mode = Mode::Browser;
-                self.status = "email sent; draft cleared".to_string();
+    /// Non-blocking drain of staged provider results. Returns whether any
+    /// state changed and the UI should repaint.
+    fn drain_background(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(rx) = &self.folder_rx {
+            match rx.try_recv() {
+                Ok(Ok(messages)) => {
+                    self.folder_rx = None;
+                    self.messages_pending = false;
+                    let count = messages.len();
+                    self.messages = messages;
+                    let label = self
+                        .folders
+                        .get(self.selected_folder)
+                        .map(|folder| folder.display_name.clone())
+                        .unwrap_or_default();
+                    self.status = format!("folder {label}: {count} messages");
+                    changed = true;
+                }
+                Ok(Err(error)) => {
+                    self.folder_rx = None;
+                    self.messages_pending = false;
+                    self.note_error(safe_error_summary(&format!(
+                        "folder load failed: {error:#}"
+                    )));
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.folder_rx = None;
+                    self.messages_pending = false;
+                    self.note_error("folder loader stopped".to_string());
+                    changed = true;
+                }
             }
-            Err(error) => self.record_send_failure(error.to_string()),
         }
+        if let Some(rx) = &self.body_rx {
+            match rx.try_recv() {
+                Ok(Ok(body)) => {
+                    self.body_rx = None;
+                    self.body_pending = false;
+                    self.bodies.push(body);
+                    self.status = "message body loaded".to_string();
+                    changed = true;
+                }
+                Ok(Err(error)) => {
+                    self.body_rx = None;
+                    self.body_pending = false;
+                    self.note_error(safe_error_summary(&format!("body fetch failed: {error:#}")));
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.body_rx = None;
+                    self.body_pending = false;
+                    self.note_error("body fetcher stopped".to_string());
+                    changed = true;
+                }
+            }
+        }
+        if let Some(rx) = &self.send_rx {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.send_rx = None;
+                    self.draft = None;
+                    self.mode = Mode::Browser;
+                    self.status = "email sent; draft cleared".to_string();
+                    changed = true;
+                }
+                Ok(Err(error)) => {
+                    self.send_rx = None;
+                    self.record_send_failure(error.to_string());
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.send_rx = None;
+                    self.record_send_failure("send worker stopped".to_string());
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     /// A failed send keeps the draft and returns to the compose surface; the
@@ -2235,5 +2333,73 @@ mod tests {
                 "hint for {mode:?} must fit ~120 columns"
             );
         }
+    }
+    #[test]
+    fn send_result_drains_success_and_clears_the_draft() {
+        let mut app = fixture_app();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(())).unwrap();
+        app.send_rx = Some(rx);
+        app.draft = Some(super::ComposeDraft {
+            to: "peer@example.com".into(),
+            cc: String::new(),
+            subject: "subject".into(),
+            body: "body".into(),
+            field: super::DraftField::To,
+            dirty: true,
+        });
+        assert!(app.drain_background());
+        assert!(app.send_rx.is_none());
+        assert!(app.draft.is_none());
+        assert_eq!(app.mode, super::Mode::Browser);
+        assert_eq!(app.status, "email sent; draft cleared");
+        // Draining an empty channel is a no-op that does not repaint.
+        assert!(!app.drain_background());
+    }
+
+    #[test]
+    fn send_result_drains_failure_keeps_the_draft_and_classifies() {
+        let mut app = fixture_app();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Err(anyhow::anyhow!("smtp connection refused")))
+            .unwrap();
+        app.send_rx = Some(rx);
+        app.draft = Some(super::ComposeDraft {
+            to: "peer@example.com".into(),
+            cc: String::new(),
+            subject: "subject".into(),
+            body: "body".into(),
+            field: super::DraftField::To,
+            dirty: true,
+        });
+        assert!(app.drain_background());
+        assert!(app.send_rx.is_none());
+        assert!(app.draft.is_some(), "a failed send keeps the draft");
+        assert_eq!(app.mode, super::Mode::Compose);
+        assert!(app.error_banner.is_some());
+    }
+
+    #[test]
+    fn folder_result_drains_into_the_message_list() {
+        let mut app = fixture_app();
+        let envelopes = vec![super::EmailEnvelope {
+            uid: 1,
+            uid_validity: None,
+            modseq: None,
+            from: "sender@example.com".into(),
+            subject: "hello".into(),
+            date: "2026-11-04".into(),
+            seen: false,
+            size: 128,
+        }];
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(envelopes)).unwrap();
+        app.folder_rx = Some(rx);
+        app.messages_pending = true;
+        assert!(app.drain_background());
+        assert!(app.folder_rx.is_none());
+        assert!(!app.messages_pending);
+        assert_eq!(app.messages.len(), 1);
+        assert!(app.status.contains("1 message"));
     }
 }
