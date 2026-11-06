@@ -29,28 +29,28 @@ Independent process plugin for [VoidB](https://github.com/limmytian/voidb) to co
 
 ## Usage & Operational Modes
 
-When installed, `voidb-cli` automatically discovers this plugin and provides seamless transparent dispatch:
+When installed, `vb` automatically discovers this plugin and provides seamless transparent dispatch:
 
 ### 1. Human Operations (CLI & TUI)
 
 ```bash
 # Connectivity test
-voidb-cli email test --profile my-email
+vb email test --profile my-email
 
 # Launch standalone interactive fullscreen TUI
-voidb-cli email tui --profile my-email
+vb email tui --profile my-email
 
 # Mailbox operations
-voidb-cli email folders --profile my-email
-voidb-cli email list INBOX --limit 20 --profile my-email
-voidb-cli email read INBOX 12345 --profile my-email
+vb email folders --profile my-email
+vb email list INBOX --limit 20 --profile my-email
+vb email read INBOX 12345 --profile my-email
 ```
 
 ### 2. Machine Communication (AI Agents & JSON-RPC)
 
 ```bash
-# Run the stdio-jsonrpc server directly or via voidb-cli
-voidb-cli email serve
+# Run the stdio-jsonrpc server directly or via vb
+vb email serve
 # Or directly run the binary:
 ./bin/voidb-plugin-email serve
 ```
@@ -69,8 +69,8 @@ cp -r plugin.toml bin schemas "$HOME/Library/Application Support/voidb/plugins/e
 Verify discovery via `voidb`:
 
 ```bash
-voidb-cli plugin list
-voidb-cli email --help
+vb plugin list
+vb email --help
 ```
 
 ### Development & Build
