@@ -1,6 +1,6 @@
 id = "email"
 name = "Email Plugin"
-version = "0.3.5"
+version = "0.3.6"
 protocol_version = "1"
 description = "Email (IMAP/POP3/SMTP) remote communication and mailbox management plugin for VoidB."
 license = "Apache-2.0"
@@ -649,7 +649,7 @@ tui = true
 raw_input = false
 
 [requirements]
-voidb_core = ">=0.3.3"
+voidb_core = ">=0.4.1"
 platforms = [
     "darwin",
     "linux",
